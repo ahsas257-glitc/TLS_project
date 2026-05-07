@@ -1,0 +1,8 @@
+.streamlit/secrets.toml
+.streamlit/secrets.json
+gcp_service_account.json
+.venv/
+.idea/
+TLS_project/
+__pycache__/
+*.pyc
