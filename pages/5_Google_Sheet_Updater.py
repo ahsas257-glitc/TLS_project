@@ -1,6 +1,7 @@
 import re
 from io import BytesIO
 
+import altair as alt
 import pandas as pd
 import streamlit as st
 
@@ -25,6 +26,11 @@ TARGET_COLUMNS = [
     "Surveyor_Name",
     "Survey_Date",
 ]
+CHART_FONT = "Manrope"
+CHART_TEXT = "#dbe7ff"
+CHART_MUTED = "#93a4c4"
+CHART_GRID = "rgba(219, 231, 255, 0.12)"
+CHART_HEIGHT = 360
 SOURCE_COLUMN_CANDIDATES = {
     "KEY": ["KEY", "key", "_uuid", "uuid", "instanceid", "InstanceID", "instance_id"],
     "Province": ["Province", "province"],
@@ -42,6 +48,132 @@ def to_text(value) -> str:
     if pd.isna(value):
         return ""
     return str(value).strip()
+
+
+def count_unique(dataframe: pd.DataFrame, column_name: str) -> int:
+    if dataframe.empty or column_name not in dataframe.columns:
+        return 0
+    values = dataframe[column_name].astype(str).str.strip()
+    return int(values[values != ""].nunique())
+
+
+def top_counts(dataframe: pd.DataFrame, column_name: str, limit: int = 12) -> pd.DataFrame:
+    if dataframe.empty or column_name not in dataframe.columns:
+        return pd.DataFrame(columns=[column_name, "Count"])
+    values = dataframe[column_name].astype(str).str.strip()
+    values = values[values != ""]
+    if values.empty:
+        return pd.DataFrame(columns=[column_name, "Count"])
+    counts = values.value_counts().head(limit).reset_index()
+    counts.columns = [column_name, "Count"]
+    return counts
+
+
+def padded_numeric_domain(values: pd.Series, padding: float = 0.22, minimum: float = 1) -> list[float]:
+    numeric_values = pd.to_numeric(values, errors="coerce").fillna(0)
+    max_value = float(numeric_values.max()) if not numeric_values.empty else 0
+    return [0, max(max_value * (1 + padding), minimum)]
+
+
+def modernize_chart(chart: alt.TopLevelMixin) -> alt.TopLevelMixin:
+    return (
+        chart.configure(background="transparent")
+        .configure_view(strokeOpacity=0)
+        .configure_title(font=CHART_FONT, fontSize=16, fontWeight=800, color=CHART_TEXT, anchor="start", offset=16)
+        .configure_axis(
+            labelFont=CHART_FONT,
+            titleFont=CHART_FONT,
+            labelColor=CHART_MUTED,
+            titleColor=CHART_MUTED,
+            gridColor=CHART_GRID,
+            domainColor="rgba(219, 231, 255, 0.18)",
+            tickColor="rgba(219, 231, 255, 0.16)",
+            labelFontSize=11,
+            titleFontSize=12,
+        )
+        .configure_legend(
+            labelFont=CHART_FONT,
+            titleFont=CHART_FONT,
+            labelColor=CHART_TEXT,
+            titleColor=CHART_MUTED,
+            orient="bottom",
+            direction="horizontal",
+            symbolType="circle",
+            symbolSize=90,
+        )
+    )
+
+
+def render_luxury_metric(title: str, value: str, subtitle: str, tone: str) -> None:
+    st.markdown(
+        f"""
+        <div style="
+            position:relative; overflow:hidden; min-height:154px; padding:17px 18px;
+            border-radius:16px; border:1px solid rgba(226,232,240,0.18);
+            background:linear-gradient(145deg,rgba(255,255,255,0.15),rgba(255,255,255,0.04)),linear-gradient(135deg,rgba(10,18,37,0.96),rgba(3,8,20,0.92));
+            box-shadow:0 22px 58px rgba(0,0,0,0.30), inset 0 1px 0 rgba(255,255,255,0.18);
+            backdrop-filter:blur(24px) saturate(150%); -webkit-backdrop-filter:blur(24px) saturate(150%);
+        ">
+            <div style="position:absolute; left:0; right:0; top:0; height:3px; background:linear-gradient(90deg,{tone},rgba(255,255,255,0.82),transparent);"></div>
+            <div style="position:absolute; right:14px; top:14px; width:34px; height:34px; border-radius:11px; background:linear-gradient(145deg,{tone},rgba(255,255,255,0.10)); box-shadow:0 0 28px color-mix(in srgb,{tone} 42%,transparent);"></div>
+            <div style="position:relative; z-index:1; max-width:calc(100% - 48px); color:#b9c8e7; font-size:0.72rem; letter-spacing:0.14em; text-transform:uppercase; font-weight:900;">{title}</div>
+            <div style="position:relative; z-index:1; margin-top:18px; color:#f8fbff; font-size:clamp(1.75rem,2vw,2.3rem); line-height:1; font-weight:900; overflow-wrap:anywhere;">{value}</div>
+            <div style="position:relative; z-index:1; margin-top:16px; padding-top:11px; border-top:1px solid rgba(226,232,240,0.12); color:#a9b8d6; font-size:0.82rem; line-height:1.45; font-weight:600;">{subtitle}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_bar_chart(dataframe: pd.DataFrame, category: str, title: str, color: str, height: int = CHART_HEIGHT) -> None:
+    if dataframe.empty or "Count" not in dataframe.columns:
+        st.info("No data is available for this chart.")
+        return
+    chart_data = dataframe.copy()
+    chart_data["Count"] = pd.to_numeric(chart_data["Count"], errors="coerce").fillna(0)
+    chart_data = chart_data[chart_data["Count"] > 0]
+    if chart_data.empty:
+        st.info("No data is available for this chart.")
+        return
+    x_domain = padded_numeric_domain(chart_data["Count"], padding=0.28)
+    base = alt.Chart(chart_data).encode(
+        x=alt.X("Count:Q", title="Rows", scale=alt.Scale(domain=x_domain)),
+        y=alt.Y(f"{category}:N", sort="-x", title=None),
+        tooltip=[alt.Tooltip(f"{category}:N", title=category), alt.Tooltip("Count:Q", format=",")],
+    )
+    bars = base.mark_bar(cornerRadiusTopRight=9, cornerRadiusBottomRight=9, color=color, opacity=0.86)
+    glow = base.mark_bar(cornerRadiusTopRight=9, cornerRadiusBottomRight=9, color=color, opacity=0.18, size=24)
+    labels = base.mark_text(align="left", baseline="middle", dx=8, color=CHART_TEXT, font=CHART_FONT, fontSize=11, fontWeight=800).encode(
+        text=alt.Text("Count:Q", format=",")
+    )
+    st.altair_chart(modernize_chart(alt.layer(glow, bars, labels).properties(height=height, title=title)), use_container_width=True)
+
+
+def render_donut_chart(dataframe: pd.DataFrame, category: str, title: str, colors: list[str]) -> None:
+    if dataframe.empty or "Count" not in dataframe.columns:
+        st.info("No data is available for this chart.")
+        return
+    chart_data = dataframe.copy()
+    chart_data["Count"] = pd.to_numeric(chart_data["Count"], errors="coerce").fillna(0)
+    chart_data = chart_data[chart_data["Count"] > 0]
+    if chart_data.empty:
+        st.info("No data is available for this chart.")
+        return
+    total = int(chart_data["Count"].sum())
+    chart_data["Share"] = chart_data["Count"] / total if total else 0
+    arc = (
+        alt.Chart(chart_data)
+        .mark_arc(innerRadius=68, outerRadius=112, cornerRadius=6, padAngle=0.025)
+        .encode(
+            theta=alt.Theta("Count:Q"),
+            color=alt.Color(f"{category}:N", scale=alt.Scale(range=colors), legend=alt.Legend(title=category)),
+            tooltip=[f"{category}:N", alt.Tooltip("Count:Q", format=","), alt.Tooltip("Share:Q", format=".1%")],
+        )
+    )
+    center = alt.Chart(pd.DataFrame({"Total": [f"{total:,}"]})).mark_text(
+        font=CHART_FONT, fontSize=25, fontWeight=900, color=CHART_TEXT, dy=-4
+    ).encode(text="Total:N")
+    st.altair_chart(modernize_chart(alt.layer(arc, center).properties(height=CHART_HEIGHT, title=title)), use_container_width=True)
 
 
 def read_uploaded_file(uploaded_file) -> pd.DataFrame:
@@ -210,33 +342,108 @@ uploaded_files = st.file_uploader(
 if uploaded_files:
     transformed_datasets: list[tuple[str, pd.DataFrame]] = []
     processing_errors: list[str] = []
+    file_profile_rows: list[dict[str, object]] = []
 
     for uploaded_file in uploaded_files:
         try:
             dataframe = read_uploaded_file(uploaded_file)
-            transformed_datasets.append((uploaded_file.name, transform_dataset(dataframe, uploaded_file.name)))
+            transformed = transform_dataset(dataframe, uploaded_file.name)
+            transformed_datasets.append((uploaded_file.name, transformed))
+            file_profile_rows.append(
+                {
+                    "File": uploaded_file.name,
+                    "Tool Name": extract_tool_name(uploaded_file.name),
+                    "Source Rows": len(dataframe),
+                    "Valid KEY Rows": int(transformed["KEY"].astype(str).str.strip().ne("").sum()),
+                    "Missing KEY Rows": int(transformed["KEY"].astype(str).str.strip().eq("").sum()),
+                    "Unique Keys": count_unique(transformed, "KEY"),
+                }
+            )
         except Exception as exc:
             processing_errors.append(f"{uploaded_file.name}: {exc}")
 
     consolidated_rows = consolidate_uploaded_rows(transformed_datasets)
+    file_profile = pd.DataFrame(file_profile_rows)
+
+    try:
+        existing_keys = {
+            key.strip()
+            for key in get_worksheet_column_values(TARGET_WORKSHEET, "KEY")
+            if key.strip()
+        }
+    except GoogleSheetsConnectionError as exc:
+        st.error(str(exc))
+        st.stop()
+
+    rows_to_add = consolidated_rows[~consolidated_rows["KEY"].isin(existing_keys)].copy() if not consolidated_rows.empty else pd.DataFrame(columns=TARGET_COLUMNS)
+    duplicate_rows = len(consolidated_rows) - len(rows_to_add) if not consolidated_rows.empty else 0
+
+    metric_cols = st.columns(4, gap="large")
+    with metric_cols[0]:
+        render_luxury_metric("Uploaded files", f"{len(uploaded_files):,}", f"Processed successfully: {len(transformed_datasets):,}.", "#2563eb")
+    with metric_cols[1]:
+        render_luxury_metric("Consolidated rows", f"{len(consolidated_rows):,}", "Unique KEY rows after cross-file consolidation.", "#8b5cf6")
+    with metric_cols[2]:
+        render_luxury_metric("New QA_Log rows", f"{len(rows_to_add):,}", f"Existing duplicate keys skipped: {duplicate_rows:,}.", "#22c55e")
+    with metric_cols[3]:
+        missing_keys = int(file_profile["Missing KEY Rows"].sum()) if not file_profile.empty else 0
+        render_luxury_metric("Missing KEY rows", f"{missing_keys:,}", f"Processing errors: {len(processing_errors):,}.", "#f97316")
+
+    if processing_errors:
+        st.warning("Some files could not be processed: " + " | ".join(processing_errors))
+
+    st.markdown("<div style='height: 40px;'></div>", unsafe_allow_html=True)
+
+    profile_left, profile_right = st.columns(2, gap="large")
+    with profile_left:
+        render_bar_chart(file_profile.rename(columns={"Source Rows": "Count"}), "File", "Uploaded File Volume", "#38bdf8")
+    with profile_right:
+        render_donut_chart(top_counts(consolidated_rows, "Tool Name", 10), "Tool Name", "Tool Mix Ready for QA_Log", ["#2563eb", "#22c55e", "#f97316", "#8b5cf6", "#0f766e", "#ef4444"])
+
+    st.markdown("<div style='height: 40px;'></div>", unsafe_allow_html=True)
+
+    geo_left, geo_right = st.columns(2, gap="large")
+    with geo_left:
+        render_bar_chart(top_counts(consolidated_rows, "Province", 12), "Province", "Rows by Province", "#0f766e")
+    with geo_right:
+        render_bar_chart(top_counts(consolidated_rows, "District", 12), "District", "Rows by District", "#f97316")
+
+    st.markdown("<div style='height: 40px;'></div>", unsafe_allow_html=True)
+
+    quality_left, quality_right = st.columns(2, gap="large")
+    with quality_left:
+        quality_mix = pd.DataFrame(
+            {
+                "Signal": ["New rows", "Duplicate keys", "Missing KEY rows"],
+                "Count": [len(rows_to_add), duplicate_rows, missing_keys],
+            }
+        )
+        render_donut_chart(quality_mix, "Signal", "Append Readiness Mix", ["#22c55e", "#f97316", "#ef4444"])
+    with quality_right:
+        render_bar_chart(top_counts(consolidated_rows, "Surveyor_Name", 12), "Surveyor_Name", "Rows by Surveyor", "#8b5cf6")
+
+    st.markdown("<div style='height: 40px;'></div>", unsafe_allow_html=True)
+
+    table_left, table_right = st.columns(2, gap="large")
+    with table_left:
+        st.markdown("### File Quality Profile")
+        if file_profile.empty:
+            st.info("No file profile is available.")
+        else:
+            st.dataframe(file_profile, use_container_width=True, hide_index=True, height=460)
+
+    with table_right:
+        st.markdown("### Rows Ready To Append")
+        if rows_to_add.empty:
+            st.info("No new rows are ready to append.")
+        else:
+            st.dataframe(rows_to_add[TARGET_COLUMNS], use_container_width=True, hide_index=True, height=460)
 
     if not consolidated_rows.empty:
         if st.button(f"Add Data To {TARGET_WORKSHEET}", type="primary"):
             if processing_errors:
                 st.error("Some files could not be processed.")
                 st.stop()
-
-            try:
-                existing_keys = {
-                    key.strip()
-                    for key in get_worksheet_column_values(TARGET_WORKSHEET, "KEY")
-                    if key.strip()
-                }
-            except GoogleSheetsConnectionError as exc:
-                st.error(str(exc))
-                st.stop()
-
-            rows_to_add = consolidated_rows[~consolidated_rows["KEY"].isin(existing_keys)].copy()
             total_rows = 0
 
             if not rows_to_add.empty:
