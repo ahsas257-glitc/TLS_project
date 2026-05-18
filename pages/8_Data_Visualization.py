@@ -1105,6 +1105,74 @@ def render_tool5_experience_duration_gender_charts(dataframe: pd.DataFrame) -> N
         st.altair_chart(modernize_chart(right_chart), use_container_width=True)
 
 
+def render_tool5_priority_columns_deep_dive(dataframe: pd.DataFrame, schema: dict[str, Any]) -> None:
+    indicator_columns = [
+        "separate_clean_toilets",
+        "toilets_disability_accessible",
+        "handwashing_soap_water",
+        "tls_not_overcrowded",
+        "students_safe_engaged",
+        "returnee_host_present",
+        "classroom_management_evidence",
+    ]
+    numeric_columns = ["enrolled_male", "enrolled_female"]
+    lookup = {normalize_key(column): column for column in dataframe.columns}
+
+    st.markdown("### Tool 5 Priority Indicators")
+    for indicator_key in indicator_columns:
+        column = lookup.get(normalize_key(indicator_key))
+        if not column:
+            continue
+        field = schema_field_for_column(column, schema)
+        label = field["label"] if field and field.get("label") else column
+        counts = count_single_choice(dataframe, column, field, schema, limit=10)
+        if counts.empty:
+            continue
+        st.markdown(f"#### {label}")
+        left_col, right_col = st.columns(2, gap="large")
+        with left_col:
+            render_donut_chart(counts, "Response", f"{label} · Response Distribution")
+        with right_col:
+            render_bar_chart(counts, "Response", f"{label} · Response Counts", color="#22c55e")
+        st.markdown("<div style='height: 14px;'></div>", unsafe_allow_html=True)
+
+    zone_column = first_existing_column(dataframe, ["Zone", "zone", "Region", "region"])
+    province_column = first_existing_column(dataframe, ["Province", "province"])
+    for numeric_key in numeric_columns:
+        column = lookup.get(normalize_key(numeric_key))
+        if not column:
+            continue
+        field = schema_field_for_column(column, schema)
+        label = field["label"] if field and field.get("label") else column
+        numeric_values = pd.to_numeric(dataframe[column], errors="coerce").dropna()
+        if numeric_values.empty:
+            continue
+        st.markdown(f"#### {label}")
+        left_col, right_col = st.columns(2, gap="large")
+        with left_col:
+            render_numeric_chart(dataframe, column, f"{label} · Value Distribution")
+        with right_col:
+            if zone_column and province_column:
+                grouped = dataframe[[column, zone_column, province_column]].copy()
+                grouped["Value"] = pd.to_numeric(grouped[column], errors="coerce").fillna(0)
+                grouped["Zone"] = grouped[zone_column].fillna("Unknown").astype(str).str.strip().replace("", "Unknown")
+                grouped["Province"] = grouped[province_column].fillna("Unknown").astype(str).str.strip().replace("", "Unknown")
+                grouped["ZoneProvince"] = grouped["Zone"] + " · " + grouped["Province"]
+                summary = grouped.groupby("ZoneProvince", as_index=False)["Value"].sum().sort_values("Value", ascending=False).head(16)
+                summary = summary.rename(columns={"Value": "Count"})
+                render_bar_chart(summary, "ZoneProvince", f"{label} · Total by Zone and Province", color="#8b5cf6", value_column="Count")
+            else:
+                summary = pd.DataFrame(
+                    {
+                        "Metric": ["Total", "Average", "Median"],
+                        "Value": [numeric_values.sum(), numeric_values.mean(), numeric_values.median()],
+                    }
+                )
+                summary = summary.rename(columns={"Value": "Count"})
+                render_bar_chart(summary, "Metric", f"{label} · Summary Statistics", color="#8b5cf6", value_column="Count")
+        st.markdown("<div style='height: 14px;'></div>", unsafe_allow_html=True)
+
+
 def render_donut_chart(dataframe: pd.DataFrame, category: str, title: str, colors: list[str] | None = None) -> None:
     if dataframe.empty or category not in dataframe.columns or "Count" not in dataframe.columns:
         st.info("No data is available for this chart.")
@@ -2689,6 +2757,8 @@ def render_dataset_analysis(source_name: str, sheet_name: str, dataset: pd.DataF
             render_tool5_host_students_circular_charts(filtered)
             st.markdown("<div style='height: 24px;'></div>", unsafe_allow_html=True)
             render_tool5_experience_duration_gender_charts(filtered)
+            st.markdown("<div style='height: 24px;'></div>", unsafe_allow_html=True)
+            render_tool5_priority_columns_deep_dive(filtered, schema)
             st.markdown("<div style='height: 24px;'></div>", unsafe_allow_html=True)
         overview_left, overview_right = st.columns(2, gap="large")
         with overview_left:
