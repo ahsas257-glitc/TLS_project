@@ -1208,46 +1208,88 @@ def build_tool5_attendance_group_series(dataframe: pd.DataFrame) -> pd.DataFrame
         },
     }
 
-    if dataframe.empty or not group_column:
-        return pd.DataFrame(columns=["Group", "Day", "Male", "Female", "Total", "Present %"])
-
-    work = dataframe.copy()
-    group_text = work[group_column].fillna("").astype(str).str.strip().str.lower()
-    work["Group"] = "Unknown"
-    work.loc[group_text.str.contains("host", na=False), "Group"] = "Host"
-    work.loc[group_text.str.contains("return", na=False), "Group"] = "Returnee"
-    work = work[work["Group"].isin(["Host", "Returnee"])]
-    if work.empty:
+    if dataframe.empty:
         return pd.DataFrame(columns=["Group", "Day", "Male", "Female", "Total", "Present %"])
 
     rows: list[dict[str, Any]] = []
-    for group_name in ["Host", "Returnee"]:
-        subset = work[work["Group"] == group_name]
-        if subset.empty:
-            continue
-        for day_name, cols in day_columns.items():
-            male_col = cols["male"]
-            female_col = cols["female"]
-            total_col = cols["total"]
-            pct_col = cols["percent"]
-            male_sum = pd.to_numeric(subset[male_col], errors="coerce").fillna(0).sum() if male_col else 0.0
-            female_sum = pd.to_numeric(subset[female_col], errors="coerce").fillna(0).sum() if female_col else 0.0
-            total_sum = pd.to_numeric(subset[total_col], errors="coerce").fillna(0).sum() if total_col else (male_sum + female_sum)
-            if pct_col:
-                pct_values = pd.to_numeric(subset[pct_col], errors="coerce")
-                present_pct = float(pct_values.dropna().mean()) if pct_values.notna().any() else (float((total_sum / max(male_sum + female_sum, 1)) * 100))
-            else:
-                present_pct = float((total_sum / max(male_sum + female_sum, 1)) * 100) if (male_sum + female_sum) > 0 else 0.0
-            rows.append(
-                {
-                    "Group": group_name,
-                    "Day": day_name,
-                    "Male": float(male_sum),
-                    "Female": float(female_sum),
-                    "Total": float(total_sum),
-                    "Present %": round(present_pct, 2),
-                }
-            )
+
+    # Mode A: rows are tagged by group (Host/Returnee) in a dedicated column.
+    if group_column:
+        work = dataframe.copy()
+        group_text = work[group_column].fillna("").astype(str).str.strip().str.lower()
+        work["Group"] = "Unknown"
+        work.loc[group_text.str.contains("host", na=False), "Group"] = "Host"
+        work.loc[group_text.str.contains("return", na=False), "Group"] = "Returnee"
+        work = work[work["Group"].isin(["Host", "Returnee"])]
+        for group_name in ["Host", "Returnee"]:
+            subset = work[work["Group"] == group_name]
+            if subset.empty:
+                continue
+            for day_name, cols in day_columns.items():
+                male_col = cols["male"]
+                female_col = cols["female"]
+                total_col = cols["total"]
+                pct_col = cols["percent"]
+                male_sum = pd.to_numeric(subset[male_col], errors="coerce").fillna(0).sum() if male_col else 0.0
+                female_sum = pd.to_numeric(subset[female_col], errors="coerce").fillna(0).sum() if female_col else 0.0
+                total_sum = pd.to_numeric(subset[total_col], errors="coerce").fillna(0).sum() if total_col else (male_sum + female_sum)
+                if pct_col:
+                    pct_values = pd.to_numeric(subset[pct_col], errors="coerce")
+                    present_pct = float(pct_values.dropna().mean()) if pct_values.notna().any() else (float((total_sum / max(male_sum + female_sum, 1)) * 100))
+                else:
+                    present_pct = float((total_sum / max(male_sum + female_sum, 1)) * 100) if (male_sum + female_sum) > 0 else 0.0
+                rows.append(
+                    {
+                        "Group": group_name,
+                        "Day": day_name,
+                        "Male": float(male_sum),
+                        "Female": float(female_sum),
+                        "Total": float(total_sum),
+                        "Present %": round(present_pct, 2),
+                    }
+                )
+
+    # Mode B fallback: columns are already split by Host/Returnee naming.
+    if not rows:
+        normalized_columns = {normalize_key(column): column for column in dataframe.columns}
+        for group_name, group_token in [("Host", "host"), ("Returnee", "returnee")]:
+            for day_number, day_name in [("1", "Day 1"), ("2", "Day 2"), ("3", "Day 3")]:
+                male_col = None
+                female_col = None
+                total_col = None
+                percent_col = None
+                for key, original in normalized_columns.items():
+                    if f"day{day_number}" not in key or group_token not in key:
+                        continue
+                    if "male" in key and "female" not in key:
+                        male_col = original
+                    elif "female" in key:
+                        female_col = original
+                    elif "total" in key and "present" in key:
+                        total_col = original
+                    elif "percent" in key or "pct" in key:
+                        percent_col = original
+                if not any([male_col, female_col, total_col, percent_col]):
+                    continue
+                male_sum = pd.to_numeric(dataframe[male_col], errors="coerce").fillna(0).sum() if male_col else 0.0
+                female_sum = pd.to_numeric(dataframe[female_col], errors="coerce").fillna(0).sum() if female_col else 0.0
+                total_sum = pd.to_numeric(dataframe[total_col], errors="coerce").fillna(0).sum() if total_col else (male_sum + female_sum)
+                if percent_col:
+                    pct_values = pd.to_numeric(dataframe[percent_col], errors="coerce")
+                    present_pct = float(pct_values.dropna().mean()) if pct_values.notna().any() else (float((total_sum / max(male_sum + female_sum, 1)) * 100))
+                else:
+                    present_pct = float((total_sum / max(male_sum + female_sum, 1)) * 100) if (male_sum + female_sum) > 0 else 0.0
+                rows.append(
+                    {
+                        "Group": group_name,
+                        "Day": day_name,
+                        "Male": float(male_sum),
+                        "Female": float(female_sum),
+                        "Total": float(total_sum),
+                        "Present %": round(present_pct, 2),
+                    }
+                )
+
     return pd.DataFrame(rows)
 
 
