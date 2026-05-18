@@ -741,6 +741,85 @@ def render_tool5_tpm_duplicate_chart(dataframe: pd.DataFrame) -> None:
     st.altair_chart(modernize_chart(chart), use_container_width=True)
 
 
+def build_tool5_returnee_zone_province(dataframe: pd.DataFrame) -> pd.DataFrame:
+    returnee_column = first_existing_column(
+        dataframe,
+        ["# of returnee students", "No of returnee students", "number of returnee students", "returnee_students"],
+    )
+    zone_column = first_existing_column(dataframe, ["Zone", "zone", "Region", "region"])
+    province_column = first_existing_column(dataframe, ["Province", "province"])
+    if not returnee_column or not zone_column or not province_column or dataframe.empty:
+        return pd.DataFrame(columns=["Zone", "Province", "Returnee Students"])
+
+    work = dataframe[[returnee_column, zone_column, province_column]].copy()
+    work["Returnee Students"] = pd.to_numeric(work[returnee_column], errors="coerce").fillna(0)
+    work["Zone"] = work[zone_column].fillna("Unknown").astype(str).str.strip().replace("", "Unknown")
+    work["Province"] = work[province_column].fillna("Unknown").astype(str).str.strip().replace("", "Unknown")
+    grouped = (
+        work.groupby(["Zone", "Province"], as_index=False)["Returnee Students"]
+        .sum()
+        .sort_values("Returnee Students", ascending=False)
+    )
+    return grouped[grouped["Returnee Students"] > 0].head(40)
+
+
+def build_tool5_returnee_climate(dataframe: pd.DataFrame) -> pd.DataFrame:
+    returnee_column = first_existing_column(
+        dataframe,
+        ["# of returnee students", "No of returnee students", "number of returnee students", "returnee_students"],
+    )
+    climate_column = first_existing_column(dataframe, ["Climate", "climate"])
+    if not returnee_column or not climate_column or dataframe.empty:
+        return pd.DataFrame(columns=["Climate", "Returnee Students"])
+
+    work = dataframe[[returnee_column, climate_column]].copy()
+    work["Returnee Students"] = pd.to_numeric(work[returnee_column], errors="coerce").fillna(0)
+    work["Climate"] = work[climate_column].fillna("Unknown").astype(str).str.strip().replace("", "Unknown")
+    grouped = (
+        work.groupby("Climate", as_index=False)["Returnee Students"]
+        .sum()
+        .sort_values("Returnee Students", ascending=False)
+    )
+    return grouped[grouped["Returnee Students"] > 0]
+
+
+def render_tool5_returnee_zone_province_chart(dataframe: pd.DataFrame) -> None:
+    chart_data = build_tool5_returnee_zone_province(dataframe)
+    if chart_data.empty:
+        st.info("No valid returnee-student values were found for Zone and Province.")
+        return
+    chart = (
+        alt.Chart(chart_data)
+        .mark_bar(cornerRadiusTopRight=9, cornerRadiusBottomRight=9, opacity=0.9)
+        .encode(
+            x=alt.X("Returnee Students:Q", title="Returnee Students"),
+            y=alt.Y("Province:N", sort="-x", title=None),
+            color=alt.Color("Zone:N", scale=alt.Scale(range=PALETTE), legend=alt.Legend(title="Zone")),
+            tooltip=["Zone:N", "Province:N", alt.Tooltip("Returnee Students:Q", format=",")],
+        )
+        .properties(height=460, title="Tool 5 · Returnee Students by Zone and Province")
+    )
+    st.altair_chart(modernize_chart(chart), use_container_width=True)
+
+
+def render_tool5_returnee_climate_chart(dataframe: pd.DataFrame) -> None:
+    chart_data = build_tool5_returnee_climate(dataframe)
+    if chart_data.empty:
+        st.info("No valid returnee-student values were found for Climate.")
+        return
+    chart = (
+        alt.Chart(chart_data)
+        .mark_arc(innerRadius=76, outerRadius=128, cornerRadius=6, padAngle=0.02)
+        .encode(
+            theta=alt.Theta("Returnee Students:Q"),
+            color=alt.Color("Climate:N", scale=alt.Scale(range=PALETTE), legend=alt.Legend(title="Climate")),
+            tooltip=["Climate:N", alt.Tooltip("Returnee Students:Q", format=",")],
+        )
+        .properties(height=460, title="Tool 5 · Returnee Students by Climate")
+    )
+    st.altair_chart(modernize_chart(chart), use_container_width=True)
+
+
 def render_donut_chart(dataframe: pd.DataFrame, category: str, title: str, colors: list[str] | None = None) -> None:
     if dataframe.empty or category not in dataframe.columns or "Count" not in dataframe.columns:
         st.info("No data is available for this chart.")
@@ -2311,6 +2390,11 @@ def render_dataset_analysis(source_name: str, sheet_name: str, dataset: pd.DataF
     with tabs[0]:
         if selected_tool == "Tool 5":
             render_tool5_tpm_duplicate_chart(filtered)
+            tool5_left, tool5_right = st.columns(2, gap="large")
+            with tool5_left:
+                render_tool5_returnee_zone_province_chart(filtered)
+            with tool5_right:
+                render_tool5_returnee_climate_chart(filtered)
             st.markdown("<div style='height: 24px;'></div>", unsafe_allow_html=True)
         overview_left, overview_right = st.columns(2, gap="large")
         with overview_left:
