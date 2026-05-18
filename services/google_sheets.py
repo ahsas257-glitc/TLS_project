@@ -93,7 +93,7 @@ def get_worksheet(worksheet_name: str | None = None):
         ) from exc
 
 
-@st.cache_data(ttl=120, show_spinner=False)
+@st.cache_data(ttl=1800, show_spinner=False)
 def load_records() -> pd.DataFrame:
     try:
         worksheet = get_worksheet()
@@ -103,7 +103,7 @@ def load_records() -> pd.DataFrame:
         return pd.DataFrame()
 
 
-@st.cache_data(ttl=180, show_spinner=False)
+@st.cache_data(ttl=1800, show_spinner=False)
 def load_worksheet_values(worksheet_name: str) -> list[list[str]]:
     last_error: Exception | None = None
     for attempt in range(3):
@@ -123,7 +123,7 @@ def append_record(record: dict[str, str], column_order: list[str]) -> None:
     clear_google_sheets_caches()
 
 
-@st.cache_data(ttl=180, show_spinner=False)
+@st.cache_data(ttl=1800, show_spinner=False)
 def load_worksheet_records(worksheet_name: str) -> pd.DataFrame:
     last_error: Exception | None = None
     for attempt in range(3):
@@ -137,7 +137,7 @@ def load_worksheet_records(worksheet_name: str) -> pd.DataFrame:
     raise GoogleSheetsConnectionError(f"Unable to load worksheet records from `{worksheet_name}`: {last_error}") from last_error
 
 
-@st.cache_data(ttl=180, show_spinner=False)
+@st.cache_data(ttl=1800, show_spinner=False)
 def get_worksheet_headers(worksheet_name: str) -> list[str]:
     worksheet = get_worksheet(worksheet_name)
     values = worksheet.get_all_values()
@@ -146,7 +146,7 @@ def get_worksheet_headers(worksheet_name: str) -> list[str]:
     return values[0]
 
 
-@st.cache_data(ttl=180, show_spinner=False)
+@st.cache_data(ttl=1800, show_spinner=False)
 def get_worksheet_column_values(worksheet_name: str, column_name: str) -> list[str]:
     worksheet = get_worksheet(worksheet_name)
     values = worksheet.get_all_values()

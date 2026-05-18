@@ -16,6 +16,7 @@ from services.google_sheets import (
     update_summary_timestamp,
 )
 from services.ui_theme import apply_liquid_glass_theme, render_glass_section
+from services.google_drive import get_drive_folder_id, read_drive_sheets_by_name
 
 
 QA_LOG_SHEET = "QA_Log"
@@ -39,6 +40,11 @@ CHART_TEXT = "#dbe7ff"
 CHART_MUTED = "#93a4c4"
 CHART_GRID = "rgba(219, 231, 255, 0.12)"
 CHART_HEIGHT = 360
+GOOGLE_DRIVE_DATASET_FILES = [
+    "Tool 2 ECE Classroom Observation.xlsx",
+    "Tool 3 ECE Parent Interview.xlsx",
+    "Tool 5 TLS Classroom Observation.xlsx",
+]
 
 
 def to_text(value: object) -> str:
@@ -208,10 +214,49 @@ def read_uploaded_file_bytes(file_name: str, file_bytes: bytes) -> pd.DataFrame:
     raise ValueError("Only CSV and Excel files are supported.")
 
 
-def build_dataset_index(uploaded_files: list) -> tuple[dict[str, dict[str, str]], list[str], list[str]]:
+def build_dataset_index(uploaded_files: list, use_drive_datasets: bool) -> tuple[dict[str, dict[str, str]], list[str], list[str]]:
     dataset_index: OrderedDict[str, dict[str, str]] = OrderedDict()
     dataset_columns: OrderedDict[str, None] = OrderedDict()
     errors: list[str] = []
+
+    if use_drive_datasets:
+        folder_id = get_drive_folder_id()
+        if not folder_id:
+            errors.append("`GOOGLE_DRIVE_FOLDER_ID` (or folder URL) is missing in secrets.")
+        for dataset_name in GOOGLE_DRIVE_DATASET_FILES:
+            try:
+                if not folder_id:
+                    break
+                sheets = read_drive_sheets_by_name(dataset_name, folder_id)
+                if "data" in sheets:
+                    dataframe = sheets["data"].fillna("")
+                elif sheets:
+                    first_sheet = next(iter(sheets.keys()))
+                    dataframe = sheets[first_sheet].fillna("")
+                else:
+                    errors.append(f"{dataset_name}: no readable worksheet was found.")
+                    continue
+
+                key_column = first_existing_column(dataframe, ["KEY", "Key", "key", "_uuid", "uuid", "instanceid", "InstanceID"])
+                if not key_column:
+                    errors.append(f"{dataset_name}: KEY column was not found.")
+                    continue
+
+                for column in dataframe.columns:
+                    dataset_columns[to_text(column)] = None
+
+                for _, row in dataframe.iterrows():
+                    key = value_from_row(row, key_column)
+                    if not key:
+                        continue
+                    current = dataset_index.setdefault(key, {})
+                    for column in dataframe.columns:
+                        value = value_from_row(row, column)
+                        if value and not current.get(to_text(column)):
+                            current[to_text(column)] = value
+            except Exception as exc:
+                errors.append(f"{dataset_name}: {exc}")
+
     for uploaded_file in uploaded_files:
         try:
             dataframe = read_uploaded_file_bytes(uploaded_file.name, uploaded_file.getvalue()).fillna("")
@@ -415,14 +460,19 @@ except GoogleSheetsConnectionError as exc:
 
 upload_left, upload_right = st.columns(2, gap="large")
 with upload_left:
+    use_drive_datasets = st.checkbox(
+        "Use Google Drive datasets automatically",
+        value=True,
+        help="Loads configured Tool 2/3/5 datasets from Google Drive for Old_Value lookup.",
+    )
     uploaded_files = st.file_uploader(
-        "Import source datasets for Old_Value lookup",
+        "Import source datasets for Old_Value lookup (optional)",
         type=["csv", "xlsx", "xls"],
         accept_multiple_files=True,
         help="Upload the original datasets that contain KEY and the question/label columns.",
     )
 
-dataset_index, dataset_columns, dataset_errors = build_dataset_index(uploaded_files or [])
+dataset_index, dataset_columns, dataset_errors = build_dataset_index(uploaded_files or [], use_drive_datasets)
 base_call_back_rows, skipped_blank_keys = build_call_back_rows(qa_log, dataset_index)
 
 with upload_right:

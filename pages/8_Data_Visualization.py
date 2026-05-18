@@ -14,6 +14,7 @@ import pandas as pd
 import streamlit as st
 
 from services.ui_theme import apply_liquid_glass_theme, render_glass_section
+from services.google_drive import get_drive_folder_id, read_drive_sheets_by_name
 
 try:
     import streamlit.components.v1 as components
@@ -39,11 +40,11 @@ XLSFORM_PATHS = {
     "Tool 3": Path(r"C:\Users\LENOVO\Desktop\TLS\XLS_Form\ECE_Tool3_Parent_Interview.xlsx"),
     "Tool 5": Path(r"C:\Users\LENOVO\Desktop\TLS\XLS_Form\TLS_Tool5_Classroom_Observation.xlsx"),
 }
-LOCAL_DATASET_PATHS = {
-    "Tool 2 ECE Classroom Observation": Path(r"C:\Users\LENOVO\Desktop\TLS\Tool 2 ECE Classroom Observation.xlsx"),
-    "Tool 3 ECE Parent Interview": Path(r"C:\Users\LENOVO\Desktop\TLS\Tool 3 ECE Parent Interview.xlsx"),
-    "Tool 5 TLS Classroom Observation": Path(r"C:\Users\LENOVO\Desktop\TLS\Tool 5 TLS Classroom Observation.xlsx"),
-}
+GOOGLE_DRIVE_DATASET_FILES = [
+    "Tool 2 ECE Classroom Observation.xlsx",
+    "Tool 3 ECE Parent Interview.xlsx",
+    "Tool 5 TLS Classroom Observation.xlsx",
+]
 STRUCTURAL_TYPES = {
     "begin",
     "end",
@@ -207,15 +208,6 @@ def read_uploaded_sheets(uploaded_file) -> dict[str, pd.DataFrame]:
         sheets = pd.read_excel(buffer, sheet_name=None)
         return {str(name): frame for name, frame in sheets.items()}
     raise ValueError("Only CSV, XLS, and XLSX datasets are supported.")
-
-
-@st.cache_data(ttl=300, show_spinner=False)
-def read_local_sheets(path_text: str) -> dict[str, pd.DataFrame]:
-    path = Path(path_text)
-    if path.suffix.lower() == ".csv":
-        return {"CSV": pd.read_csv(path)}
-    sheets = pd.read_excel(path, sheet_name=None)
-    return {str(name): frame for name, frame in sheets.items()}
 
 
 def default_sheet_name(sheets: dict[str, pd.DataFrame]) -> str:
@@ -2257,40 +2249,43 @@ render_glass_section(
 )
 
 uploaded_files = st.file_uploader(
-    "Upload one or more datasets",
+    "Upload one or more datasets (optional)",
     type=["csv", "xlsx", "xls"],
     accept_multiple_files=True,
 )
 
-available_local_datasets = {name: path for name, path in LOCAL_DATASET_PATHS.items() if path.exists()}
-use_local_datasets = False
-if available_local_datasets:
-    use_local_datasets = st.checkbox(
-        "Use local TLS datasets",
-        value=not uploaded_files,
-        help="Loads the three datasets from C:\\Users\\LENOVO\\Desktop\\TLS when they are available.",
-    )
+use_drive_datasets = st.checkbox(
+    "Use Google Drive datasets automatically",
+    value=True,
+    help="Loads the three configured TLS datasets from Google Drive using secrets.",
+)
 
 dataset_records: list[dict[str, Any]] = []
 processing_errors: list[str] = []
 
-if use_local_datasets:
-    for local_name, path in available_local_datasets.items():
+if use_drive_datasets:
+    folder_id = get_drive_folder_id()
+    if not folder_id:
+        processing_errors.append("`GOOGLE_DRIVE_FOLDER_ID` (or folder URL) is missing in secrets.")
+    for file_name in GOOGLE_DRIVE_DATASET_FILES:
         try:
-            sheets = read_local_sheets(str(path))
+            if not folder_id:
+                break
+            sheets = read_drive_sheets_by_name(file_name, folder_id)
+            source_file_name = file_name
             sheet_name = default_sheet_name(sheets)
             raw_dataframe = sheets[sheet_name].copy().dropna(how="all")
             dataset_records.append(
                 {
-                    "source_name": path.name,
-                    "display_name": local_name,
+                    "source_name": source_file_name,
+                    "display_name": file_name.rsplit(".", 1)[0],
                     "sheet_name": sheet_name,
                     "raw_rows": len(raw_dataframe),
                     "dataframe": prepare_dataset(raw_dataframe),
                 }
             )
         except Exception as exc:
-            processing_errors.append(f"{path.name}: {exc}")
+            processing_errors.append(f"{file_name}: {exc}")
 
 for uploaded_file in uploaded_files or []:
     try:
