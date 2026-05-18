@@ -118,6 +118,91 @@ CHART_MUTED = "#93a4c4"
 CHART_GRID = "rgba(219, 231, 255, 0.12)"
 CHART_HEIGHT = 360
 PALETTE = ["#2563eb", "#22c55e", "#f97316", "#8b5cf6", "#0f766e", "#ef4444", "#38bdf8", "#f59e0b"]
+TOOL5_EXECUTIVE_COLUMN_ORDER = [
+    "Is_this_tls_existing",
+    "why_not_existing",
+    "why_not_existing_Translation",
+    "tls_image",
+    "is_tls_open",
+    "why_not_open",
+    "why_not_open_Translation",
+    "Consent_Informed",
+    "date_of_visit",
+    "Resp_type",
+    "Resp_type_other",
+    "Resp_gender",
+    "Resp_name",
+    "Resp_phone",
+    "Resp_experience_duration",
+    "num_host_students",
+    "num_returnee_students",
+    "num_total_students",
+    "total_students_discrepancy",
+    "desks_chairs_all",
+    "sufficient_learning_materials",
+    "separate_clean_toilets",
+    "toilets_disability_accessible",
+    "handwashing_soap_water",
+    "tls_not_overcrowded",
+    "students_safe_engaged",
+    "returnee_host_present",
+    "classroom_management_evidence",
+    "enrolled_male",
+    "enrolled_female",
+    "total_enrolled",
+    "marked_present_male",
+    "marked_present_female",
+    "total_marked_present",
+    "headcount_present_male",
+    "headcount_present_female",
+    "total_headcount_present",
+    "day1_present_male",
+    "day1_present_female",
+    "day1_total_present",
+    "day1_present_percent",
+    "day2_present_male",
+    "day2_present_female",
+    "day2_total_present",
+    "day2_present_percent",
+    "day3_present_male",
+    "day3_present_female",
+    "day3_total_present",
+    "day3_present_percent",
+    "stopped_attending_month",
+    "stopped_girls",
+    "stopped_boys",
+    "absence_dropout_reasons",
+    "absence_dropout_reasons_other",
+    "methods_suitable_displaced",
+    "methods_suitable_displaced_comment",
+    "trauma_support_training",
+    "trauma_support_training_comment",
+    "lessons_reflect_background",
+    "lessons_reflect_background_comment",
+    "materials_adapted_level",
+    "materials_adapted_level_comment",
+    "no_prior_schooling_follow",
+    "no_prior_schooling_follow_comment",
+    "recruited_by",
+    "recruited_by_other",
+    "teacher_qualifications",
+    "teacher_qualifications_other",
+    "induction_refresher_training",
+    "induction_refresher_training_comment",
+    "mixed_class_prepared",
+    "mixed_class_prepared_comment",
+    "support_received",
+    "support_received_other",
+    "students_grouped_by_level",
+    "students_follow_content",
+    "basic_skills_improved",
+    "safe_supportive_environment",
+    "wellbeing_activities",
+    "children_comfortable_participate",
+    "complaints_awareness",
+    "visible_reporting_info",
+    "children_safe_tls",
+]
 
 
 def normalize_key(value: object) -> str:
@@ -1347,6 +1432,128 @@ def render_tool5_attendance_host_returnee_charts(dataframe: pd.DataFrame) -> Non
                 title=f"Tool 5 · {group_name} Attendance (Day 1-3)",
             )
             st.altair_chart(modernize_chart(chart), use_container_width=True)
+
+
+def build_column_coverage_counts(dataframe: pd.DataFrame, column: str) -> pd.DataFrame:
+    values = dataframe[column].fillna("").astype(str).str.strip()
+    filled = int((values != "").sum())
+    missing = max(len(dataframe) - filled, 0)
+    return pd.DataFrame(
+        [
+            {"Response": "Filled", "Count": filled},
+            {"Response": "Missing", "Count": missing},
+        ]
+    )
+
+
+def render_tool5_column_coverage_chart(dataframe: pd.DataFrame, column: str, title: str) -> None:
+    coverage = build_column_coverage_counts(dataframe, column)
+    render_donut_chart(coverage, "Response", title, colors=["#22c55e", "#ef4444"])
+
+
+def should_render_coverage_only(column: str, column_type: str) -> bool:
+    key = normalize_key(column)
+    sensitive_tokens = ["phone", "name"]
+    media_tokens = ["image", "photo", "audio", "file"]
+    if any(token in key for token in sensitive_tokens + media_tokens):
+        return True
+    return column_type in {"image", "audio", "file", "barcode"}
+
+
+def render_tool5_numeric_ordered_chart(dataframe: pd.DataFrame, column: str, title: str) -> None:
+    numeric = pd.to_numeric(dataframe[column], errors="coerce")
+    if numeric.notna().sum() == 0:
+        render_tool5_column_coverage_chart(dataframe, column, f"{title} - Data Coverage")
+        return
+
+    key = normalize_key(column)
+    province_column = first_existing_column(dataframe, ["Province", "province"])
+    zone_column = first_existing_column(dataframe, ["Zone", "zone", "Region", "region"])
+    should_sum_by_area = (
+        province_column
+        and zone_column
+        and not any(token in key for token in ["percent", "duration", "discrepancy", "month"])
+    )
+    if should_sum_by_area:
+        grouped = dataframe[[column, province_column, zone_column]].copy()
+        grouped["Count"] = pd.to_numeric(grouped[column], errors="coerce").fillna(0)
+        grouped["Zone"] = grouped[zone_column].fillna("Unknown").astype(str).str.strip().replace("", "Unknown")
+        grouped["Province"] = grouped[province_column].fillna("Unknown").astype(str).str.strip().replace("", "Unknown")
+        grouped["ZoneProvince"] = grouped["Zone"] + " - " + grouped["Province"]
+        summary = grouped.groupby("ZoneProvince", as_index=False)["Count"].sum().sort_values("Count", ascending=False).head(18)
+        if not summary.empty and summary["Count"].sum() > 0:
+            render_bar_chart(summary, "ZoneProvince", f"{title} - Total by Zone and Province", "#8b5cf6", value_column="Count", height=400)
+            return
+
+    render_numeric_chart(dataframe, column, f"{title} - Value Distribution")
+
+
+def render_tool5_single_ordered_column_chart(dataframe: pd.DataFrame, column: str, schema: dict[str, Any], position: int) -> None:
+    field = schema_field_for_column(column, schema)
+    column_type = field["type"] if field else infer_type(dataframe[column])
+    label = field["label"] if field and field.get("label") else column
+    title = f"{position}. {short_label(label, 74)}"
+    values = dataframe[column].fillna("").astype(str).str.strip()
+    filled = values[values != ""]
+
+    st.markdown(f"#### {title}")
+    st.caption(f"Column: {column}")
+
+    if filled.empty or should_render_coverage_only(column, column_type):
+        render_tool5_column_coverage_chart(dataframe, column, f"{title} - Data Coverage")
+        return
+
+    if column_type == "select_multiple":
+        counts = count_multiple_choice(dataframe, column, field, schema, limit=18)
+        if counts.empty:
+            render_tool5_column_coverage_chart(dataframe, column, f"{title} - Data Coverage")
+            return
+        render_bar_chart(counts, "Response", f"{title} - Multi-Select Responses", "#8b5cf6", height=400)
+    elif column_type == "select_one":
+        counts = count_single_choice(dataframe, column, field, schema, limit=18)
+        if counts.empty:
+            render_tool5_column_coverage_chart(dataframe, column, f"{title} - Data Coverage")
+            return
+        if len(counts) <= 8:
+            render_donut_chart(counts, "Response", f"{title} - Response Mix")
+        else:
+            render_bar_chart(counts, "Response", f"{title} - Response Counts", "#2563eb", height=400)
+    elif column_type in {"integer", "decimal", "range"}:
+        render_tool5_numeric_ordered_chart(dataframe, column, title)
+    elif column_type in {"date", "datetime", "start", "end"}:
+        parsed_dates = parse_datetime_series(dataframe[column]).dropna()
+        if parsed_dates.empty:
+            render_tool5_column_coverage_chart(dataframe, column, f"{title} - Data Coverage")
+            return
+        render_date_chart(dataframe, column, f"{title} - Timeline")
+    else:
+        unique_values = filled.nunique()
+        if unique_values <= LOW_VALUE_TEXT_MAX_UNIQUE:
+            counts = top_counts(dataframe, column, 18)
+            render_bar_chart(counts, column, f"{title} - Top Responses", "#0f766e", height=400)
+        else:
+            render_tool5_column_coverage_chart(dataframe, column, f"{title} - Data Coverage")
+
+
+def render_tool5_complete_ordered_report(dataframe: pd.DataFrame, schema: dict[str, Any]) -> None:
+    lookup = {normalize_key(column): column for column in dataframe.columns}
+    ordered_columns = [
+        lookup[normalize_key(expected)]
+        for expected in TOOL5_EXECUTIVE_COLUMN_ORDER
+        if normalize_key(expected) in lookup
+    ]
+    ordered_columns = list(dict.fromkeys(ordered_columns))
+    if not ordered_columns:
+        return
+
+    st.markdown("### Tool 5 Complete Ordered Dataset Charts")
+    st.caption("Charts follow the Tool 5 dataset column order and use XLSForm labels and choice lists when available.")
+    for offset in range(0, len(ordered_columns), 2):
+        left_col, right_col = st.columns(2, gap="large")
+        for position, (container, column) in enumerate(zip([left_col, right_col], ordered_columns[offset : offset + 2]), start=offset + 1):
+            with container:
+                render_tool5_single_ordered_column_chart(dataframe, column, schema, position)
+        st.markdown("<div style='height: 18px;'></div>", unsafe_allow_html=True)
 
 
 def render_donut_chart(dataframe: pd.DataFrame, category: str, title: str, colors: list[str] | None = None) -> None:
@@ -2936,7 +3143,7 @@ def render_dataset_analysis(source_name: str, sheet_name: str, dataset: pd.DataF
             st.markdown("<div style='height: 24px;'></div>", unsafe_allow_html=True)
             render_tool5_attendance_host_returnee_charts(filtered)
             st.markdown("<div style='height: 24px;'></div>", unsafe_allow_html=True)
-            render_tool5_priority_columns_deep_dive(filtered, schema)
+            render_tool5_complete_ordered_report(filtered, schema)
             st.markdown("<div style='height: 24px;'></div>", unsafe_allow_html=True)
         overview_left, overview_right = st.columns(2, gap="large")
         with overview_left:
