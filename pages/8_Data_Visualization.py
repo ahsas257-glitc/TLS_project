@@ -860,16 +860,26 @@ def render_tool5_returnee_climate_chart(dataframe: pd.DataFrame) -> None:
     chart_data = build_tool5_returnee_climate(dataframe)
     if chart_data.empty:
         return
-    chart = (
-        alt.Chart(chart_data)
+    total = int(chart_data["Returnee Students"].sum())
+    base = alt.Chart(chart_data)
+    arc = (
+        base
         .mark_arc(innerRadius=76, outerRadius=128, cornerRadius=6, padAngle=0.02)
         .encode(
             theta=alt.Theta("Returnee Students:Q"),
             color=alt.Color("Climate:N", scale=alt.Scale(range=PALETTE), legend=alt.Legend(title="Climate")),
             tooltip=["Climate:N", alt.Tooltip("Returnee Students:Q", format=",")],
         )
-        .properties(height=460, title="Tool 5 · Returnee Students by Climate")
     )
+    labels = (
+        base
+        .mark_text(radius=146, font=CHART_FONT, fontSize=11, fontWeight=800, color=CHART_TEXT)
+        .encode(text=alt.Text("Returnee Students:Q", format=","))
+    )
+    center = alt.Chart(pd.DataFrame({"Total": [f"{total:,}"]})).mark_text(
+        font=CHART_FONT, fontSize=24, fontWeight=900, color=CHART_TEXT, dy=-2
+    ).encode(text="Total:N")
+    chart = alt.layer(arc, labels, center).properties(height=460, title="Tool 5 · Returnee Students by Climate")
     st.altair_chart(modernize_chart(chart), use_container_width=True)
 
 
@@ -945,29 +955,49 @@ def render_tool5_host_students_circular_charts(dataframe: pd.DataFrame) -> None:
     left_col, right_col = st.columns(2, gap="large")
     with left_col:
         if not zone_province_data.empty:
-            zone_chart = (
-                alt.Chart(zone_province_data)
+            total = int(zone_province_data["Host Students"].sum())
+            base = alt.Chart(zone_province_data)
+            zone_arc = (
+                base
                 .mark_arc(innerRadius=72, outerRadius=126, cornerRadius=6, padAngle=0.02)
                 .encode(
                     theta=alt.Theta("Host Students:Q"),
                     color=alt.Color("ZoneProvince:N", scale=alt.Scale(range=PALETTE), legend=alt.Legend(title="Zone · Province")),
                     tooltip=["ZoneProvince:N", alt.Tooltip("Host Students:Q", format=",")],
                 )
-                .properties(height=430, title="Tool 5 · Host Students by Zone and Province")
             )
+            zone_labels = (
+                base
+                .mark_text(radius=142, font=CHART_FONT, fontSize=11, fontWeight=800, color=CHART_TEXT)
+                .encode(text=alt.Text("Host Students:Q", format=","))
+            )
+            zone_center = alt.Chart(pd.DataFrame({"Total": [f"{total:,}"]})).mark_text(
+                font=CHART_FONT, fontSize=23, fontWeight=900, color=CHART_TEXT, dy=-2
+            ).encode(text="Total:N")
+            zone_chart = alt.layer(zone_arc, zone_labels, zone_center).properties(height=430, title="Tool 5 · Host Students by Zone and Province")
             st.altair_chart(modernize_chart(zone_chart), use_container_width=True)
     with right_col:
         if not climate_data.empty:
-            climate_chart = (
-                alt.Chart(climate_data)
+            total = int(climate_data["Host Students"].sum())
+            base = alt.Chart(climate_data)
+            climate_arc = (
+                base
                 .mark_arc(innerRadius=72, outerRadius=126, cornerRadius=6, padAngle=0.02)
                 .encode(
                     theta=alt.Theta("Host Students:Q"),
                     color=alt.Color("Climate:N", scale=alt.Scale(range=PALETTE), legend=alt.Legend(title="Climate")),
                     tooltip=["Climate:N", alt.Tooltip("Host Students:Q", format=",")],
                 )
-                .properties(height=430, title="Tool 5 · Host Students by Climate")
             )
+            climate_labels = (
+                base
+                .mark_text(radius=142, font=CHART_FONT, fontSize=11, fontWeight=800, color=CHART_TEXT)
+                .encode(text=alt.Text("Host Students:Q", format=","))
+            )
+            climate_center = alt.Chart(pd.DataFrame({"Total": [f"{total:,}"]})).mark_text(
+                font=CHART_FONT, fontSize=23, fontWeight=900, color=CHART_TEXT, dy=-2
+            ).encode(text="Total:N")
+            climate_chart = alt.layer(climate_arc, climate_labels, climate_center).properties(height=430, title="Tool 5 · Host Students by Climate")
             st.altair_chart(modernize_chart(climate_chart), use_container_width=True)
 
 
@@ -1047,16 +1077,26 @@ def render_tool5_experience_duration_gender_charts(dataframe: pd.DataFrame) -> N
         .properties(height=420, title="Tool 5 · Experience Duration (Avg vs Median)")
     )
 
-    right_chart = (
-        alt.Chart(chart_data)
+    total = int(chart_data["Responses"].sum())
+    right_base = alt.Chart(chart_data)
+    right_arc = (
+        right_base
         .mark_arc(innerRadius=78, outerRadius=128, cornerRadius=7, padAngle=0.02)
         .encode(
             theta=alt.Theta("Responses:Q"),
             color=alt.Color("Respondent Gender:N", scale=alt.Scale(range=PALETTE), legend=alt.Legend(title="Respondent Gender")),
             tooltip=["Respondent Gender:N", alt.Tooltip("Responses:Q", format=",")],
         )
-        .properties(height=420, title="Tool 5 · Respondent Count by Gender")
     )
+    right_labels = (
+        right_base
+        .mark_text(radius=146, font=CHART_FONT, fontSize=11, fontWeight=800, color=CHART_TEXT)
+        .encode(text=alt.Text("Responses:Q", format=","))
+    )
+    right_center = alt.Chart(pd.DataFrame({"Total": [f"{total:,}"]})).mark_text(
+        font=CHART_FONT, fontSize=23, fontWeight=900, color=CHART_TEXT, dy=-2
+    ).encode(text="Total:N")
+    right_chart = alt.layer(right_arc, right_labels, right_center).properties(height=420, title="Tool 5 · Respondent Count by Gender")
 
     left_col, right_col = st.columns(2, gap="large")
     with left_col:
@@ -1087,8 +1127,13 @@ def render_donut_chart(dataframe: pd.DataFrame, category: str, title: str, color
             tooltip=[alt.Tooltip("Category:N", title=category), alt.Tooltip("Count:Q", format=","), alt.Tooltip("Share:Q", format=".1%")],
         )
     )
+    labels = (
+        alt.Chart(chart_data)
+        .mark_text(radius=128, font=CHART_FONT, fontSize=10, fontWeight=800, color=CHART_TEXT)
+        .encode(text=alt.Text("Count:Q", format=","))
+    )
     center = alt.Chart(pd.DataFrame({"Total": [f"{total:,}"]})).mark_text(font=CHART_FONT, fontSize=25, fontWeight=900, color=CHART_TEXT, dy=-4).encode(text="Total:N")
-    chart = alt.layer(arc, center).properties(height=CHART_HEIGHT + 18, title=alt.TitleParams(text=title, anchor="start", offset=24), padding={"top": 22, "right": 18, "bottom": 16, "left": 18})
+    chart = alt.layer(arc, labels, center).properties(height=CHART_HEIGHT + 18, title=alt.TitleParams(text=title, anchor="start", offset=24), padding={"top": 22, "right": 18, "bottom": 16, "left": 18})
     st.altair_chart(modernize_chart(chart), use_container_width=True)
 
 
