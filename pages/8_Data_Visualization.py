@@ -1213,7 +1213,9 @@ def build_tool5_attendance_group_series(dataframe: pd.DataFrame) -> pd.DataFrame
 
     work = dataframe.copy()
     group_text = work[group_column].fillna("").astype(str).str.strip().str.lower()
-    work["Group"] = np.where(group_text.str.contains("return"), "Returnee", np.where(group_text.str.contains("host"), "Host", "Unknown"))
+    work["Group"] = "Unknown"
+    work.loc[group_text.str.contains("host", na=False), "Group"] = "Host"
+    work.loc[group_text.str.contains("return", na=False), "Group"] = "Returnee"
     work = work[work["Group"].isin(["Host", "Returnee"])]
     if work.empty:
         return pd.DataFrame(columns=["Group", "Day", "Male", "Female", "Total", "Present %"])
