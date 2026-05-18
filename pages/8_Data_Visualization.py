@@ -489,6 +489,12 @@ def parse_returnee_series(series: pd.Series) -> pd.Series:
     return values
 
 
+def parse_duration_series(series: pd.Series) -> pd.Series:
+    text = series.fillna("").astype(str).str.strip()
+    extracted = text.str.replace(",", ".", regex=False).str.extract(r"(-?\d+(?:\.\d+)?)")[0]
+    return pd.to_numeric(extracted, errors="coerce")
+
+
 def profile_columns(dataframe: pd.DataFrame, schema: dict[str, Any]) -> pd.DataFrame:
     rows = []
     total = len(dataframe)
@@ -864,6 +870,90 @@ def render_tool5_returnee_climate_chart(dataframe: pd.DataFrame) -> None:
         )
         .properties(height=460, title="Tool 5 · Returnee Students by Climate")
     )
+    st.altair_chart(modernize_chart(chart), use_container_width=True)
+
+
+def build_tool5_experience_duration_by_gender(dataframe: pd.DataFrame) -> pd.DataFrame:
+    duration_column = first_existing_column(
+        dataframe,
+        [
+            "Resp_experience_duration",
+            "resp_experience_duration",
+            "Resp experience duration",
+            "experience_duration",
+            "experience duration",
+        ],
+    )
+    if not duration_column:
+        duration_column = first_column_by_keywords(dataframe, ["experience", "duration"])
+
+    gender_column = first_existing_column(
+        dataframe,
+        [
+            "Resp_gender",
+            "resp_gender",
+            "Respondent Gender",
+            "respondent_gender",
+            "gender",
+            "Gender",
+        ],
+    )
+    if not gender_column:
+        gender_column = first_column_by_keywords(dataframe, ["gender"])
+
+    if not duration_column or not gender_column or dataframe.empty:
+        return pd.DataFrame(columns=["Respondent Gender", "Average Duration", "Median Duration", "Responses"])
+
+    work = dataframe[[duration_column, gender_column]].copy()
+    work["Experience Duration"] = parse_duration_series(work[duration_column])
+    work["Respondent Gender"] = work[gender_column].fillna("Unknown").astype(str).str.strip().replace("", "Unknown")
+    work = work[work["Experience Duration"].notna()]
+    if work.empty:
+        return pd.DataFrame(columns=["Respondent Gender", "Average Duration", "Median Duration", "Responses"])
+
+    grouped = (
+        work.groupby("Respondent Gender", as_index=False)["Experience Duration"]
+        .agg(["mean", "median", "count"])
+        .reset_index()
+        .rename(columns={"mean": "Average Duration", "median": "Median Duration", "count": "Responses"})
+    )
+    grouped["Average Duration"] = grouped["Average Duration"].round(2)
+    grouped["Median Duration"] = grouped["Median Duration"].round(2)
+    grouped["Responses"] = grouped["Responses"].astype(int)
+    return grouped.sort_values("Average Duration", ascending=False)
+
+
+def render_tool5_experience_duration_gender_chart(dataframe: pd.DataFrame) -> None:
+    chart_data = build_tool5_experience_duration_by_gender(dataframe)
+    if chart_data.empty:
+        return
+
+    max_value = float(chart_data["Average Duration"].max())
+    bars = (
+        alt.Chart(chart_data)
+        .mark_bar(cornerRadiusTopLeft=8, cornerRadiusTopRight=8, color="#06b6d4", opacity=0.88)
+        .encode(
+            x=alt.X("Respondent Gender:N", title=None),
+            y=alt.Y("Average Duration:Q", title="Average Experience Duration", scale=alt.Scale(domain=[0, max(max_value * 1.25, 1)])),
+            tooltip=[
+                "Respondent Gender:N",
+                alt.Tooltip("Average Duration:Q", format=".2f"),
+                alt.Tooltip("Median Duration:Q", format=".2f"),
+                alt.Tooltip("Responses:Q", format=","),
+            ],
+        )
+    )
+    points = (
+        alt.Chart(chart_data)
+        .mark_point(shape="diamond", size=190, color="#f97316", filled=True)
+        .encode(x="Respondent Gender:N", y=alt.Y("Median Duration:Q"), tooltip=[alt.Tooltip("Median Duration:Q", format=".2f")])
+    )
+    labels = (
+        alt.Chart(chart_data)
+        .mark_text(dy=-10, color=CHART_TEXT, font=CHART_FONT, fontWeight=900, fontSize=11)
+        .encode(x="Respondent Gender:N", y="Average Duration:Q", text=alt.Text("Average Duration:Q", format=".2f"))
+    )
+    chart = alt.layer(bars, points, labels).properties(height=430, title="Tool 5 · Respondent Experience Duration by Gender")
     st.altair_chart(modernize_chart(chart), use_container_width=True)
 
 
@@ -2442,6 +2532,8 @@ def render_dataset_analysis(source_name: str, sheet_name: str, dataset: pd.DataF
                 render_tool5_returnee_zone_province_chart(filtered)
             with tool5_right:
                 render_tool5_returnee_climate_chart(filtered)
+            st.markdown("<div style='height: 24px;'></div>", unsafe_allow_html=True)
+            render_tool5_experience_duration_gender_chart(filtered)
             st.markdown("<div style='height: 24px;'></div>", unsafe_allow_html=True)
         overview_left, overview_right = st.columns(2, gap="large")
         with overview_left:
