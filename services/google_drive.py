@@ -120,13 +120,14 @@ def extract_drive_file_id(file_value: str) -> str:
 
 def _authorized_get(url: str, params: dict[str, Any] | None = None) -> requests.Response:
     credentials = get_drive_credentials()
-    token = credentials.token
-    response = requests.get(
-        url,
-        params=params,
-        headers={"Authorization": f"Bearer {token}"},
-        timeout=45,
-    )
+    if not credentials.valid or credentials.expired or not credentials.token:
+        credentials.refresh(Request())
+
+    response = requests.get(url, params=params, headers={"Authorization": f"Bearer {credentials.token}"}, timeout=45)
+    if response.status_code == 401:
+        # Token might have expired between cache retrieval and request time.
+        credentials.refresh(Request())
+        response = requests.get(url, params=params, headers={"Authorization": f"Bearer {credentials.token}"}, timeout=45)
     return response
 
 
