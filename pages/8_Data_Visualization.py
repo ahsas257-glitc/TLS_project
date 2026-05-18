@@ -14,6 +14,8 @@ import streamlit as st
 from services.ui_theme import apply_liquid_glass_theme, render_glass_section
 from services.google_drive import (
     extract_drive_file_id,
+    find_drive_file_id_by_keywords,
+    get_drive_folder_id,
     get_drive_dataset_id,
     read_drive_sheets,
 )
@@ -41,6 +43,12 @@ XLSFORM_DRIVE_URLS = {
     "Tool 2": "https://docs.google.com/spreadsheets/d/1aVZlk87D3mAzX1xOal_dUck4g6PPMKsT/edit?usp=drive_link&ouid=118130531358947255257&rtpof=true&sd=true",
     "Tool 3": "https://docs.google.com/spreadsheets/d/1rRfvtePPii57vHUDuqVKquFPAZUb8vmT/edit?usp=drive_link&ouid=118130531358947255257&rtpof=true&sd=true",
     "Tool 5": "https://docs.google.com/spreadsheets/d/19k3U_Q7k37WTumJ2As6bFRTatzPzyyd9/edit?usp=drive_link&ouid=118130531358947255257&rtpof=true&sd=true",
+}
+XLSFORM_FOLDER_DEFAULT_ID = "1yYmD9rTmjudFCJri9SMNnfW3-qEHWcVI"
+XLSFORM_FOLDER_KEYWORDS = {
+    "Tool 2": ("tool2", "classroom", "observation", "form"),
+    "Tool 3": ("tool3", "parent", "interview", "form"),
+    "Tool 5": ("tool5", "classroom", "observation", "form"),
 }
 GOOGLE_DRIVE_DATASET_KEYS = [
     "Tool 2 ECE Classroom Observation",
@@ -145,6 +153,70 @@ def load_all_schemas() -> dict[str, dict[str, Any]]:
     for tool_key, url in XLSFORM_DRIVE_URLS.items():
         try:
             file_id = extract_drive_file_id(url)
+            if not file_id:
+                continue
+            sheets = read_drive_sheets(file_id)
+            survey = sheets.get("survey", pd.DataFrame()).fillna("")
+            choices = sheets.get("choices", pd.DataFrame()).fillna("")
+            settings = sheets.get("settings", pd.DataFrame()).fillna("")
+            if survey.empty:
+                continue
+
+            fields: list[dict[str, Any]] = []
+            for _, row in survey.iterrows():
+                name = clean_text(row.get("name", ""))
+                type_raw = clean_text(row.get("type", ""))
+                base_type = base_question_type(type_raw)
+                if not name or base_type in STRUCTURAL_TYPES:
+                    continue
+                label = clean_text(row.get("label:English", "")) or clean_text(row.get("label:Dari", "")) or name
+                fields.append(
+                    {
+                        "name": name,
+                        "name_key": normalize_key(name),
+                        "type": base_type,
+                        "type_raw": type_raw,
+                        "choice_list": choice_list_name(type_raw),
+                        "label": label,
+                        "required": str(row.get("required", "")).strip().lower() in {"true", "yes", "1"},
+                        "relevance": clean_text(row.get("relevance", "")),
+                    }
+                )
+
+            choice_labels: dict[str, dict[str, str]] = {}
+            if {"list_name", "value"}.issubset(choices.columns):
+                for _, row in choices.iterrows():
+                    list_name = clean_text(row.get("list_name", ""))
+                    value = canonical_value(row.get("value", ""))
+                    if not list_name or not value:
+                        continue
+                    label = clean_text(row.get("label:English", "")) or clean_text(row.get("label:Dari", "")) or value
+                    choice_labels.setdefault(list_name, {})[value] = label
+
+            form_title = ""
+            form_id = ""
+            if not settings.empty:
+                form_title = clean_text(settings.iloc[0].get("form_title", ""))
+                form_id = clean_text(settings.iloc[0].get("form_id", ""))
+
+            schemas[tool_key] = {
+                "tool_key": tool_key,
+                "form_title": form_title or tool_key,
+                "form_id": form_id,
+                "fields": fields,
+                "field_by_key": {field["name_key"]: field for field in fields},
+                "choice_labels": choice_labels,
+                "path": f"gdrive://{file_id}",
+            }
+        except Exception:
+            continue
+
+    folder_id = str(st.secrets.get("GOOGLE_DRIVE_XLSFORM_FOLDER_ID", "")).strip() or get_drive_folder_id() or XLSFORM_FOLDER_DEFAULT_ID
+    for tool_key, keywords in XLSFORM_FOLDER_KEYWORDS.items():
+        if tool_key in schemas:
+            continue
+        try:
+            file_id = find_drive_file_id_by_keywords(folder_id, keywords)
             if not file_id:
                 continue
             sheets = read_drive_sheets(file_id)
