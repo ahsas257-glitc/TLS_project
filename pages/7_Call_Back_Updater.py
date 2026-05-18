@@ -15,7 +15,7 @@ from services.google_sheets import (
     update_summary_timestamp,
 )
 from services.ui_theme import apply_liquid_glass_theme, render_glass_section
-from services.google_drive import extract_drive_file_id, get_drive_dataset_id, read_drive_sheets
+from services.google_drive import get_drive_folder_id, read_drive_sheets_by_name
 
 
 QA_LOG_SHEET = "QA_Log"
@@ -40,10 +40,11 @@ CHART_MUTED = "#93a4c4"
 CHART_GRID = "rgba(219, 231, 255, 0.12)"
 CHART_HEIGHT = 360
 GOOGLE_DRIVE_DATASET_KEYS = [
-    "Tool 2 ECE Classroom Observation",
-    "Tool 3 ECE Parent Interview",
-    "Tool 5 TLS Classroom Observation",
+    "Tool 2 ECE Classroom Observation.xlsx",
+    "Tool 3 ECE Parent Interview.xlsx",
+    "Tool 5 TLS Classroom Observation.xlsx",
 ]
+DATASET_FOLDER_DEFAULT_ID = "1VFgsazs0OkRI5kmmrF1pXTr6RrPnu3hx"
 
 
 def to_text(value: object) -> str:
@@ -209,12 +210,8 @@ def build_dataset_index() -> tuple[dict[str, dict[str, str]], list[str], list[st
 
     for dataset_name in GOOGLE_DRIVE_DATASET_KEYS:
         try:
-            file_ref = get_drive_dataset_id(dataset_name)
-            file_id = extract_drive_file_id(file_ref)
-            if not file_id:
-                errors.append(f"`{dataset_name}` is missing in `GOOGLE_DRIVE_DATASET_IDS` secrets.")
-                continue
-            sheets = read_drive_sheets(file_id)
+            dataset_folder_id = str(st.secrets.get("GOOGLE_DRIVE_DATASET_FOLDER_ID", "")).strip() or get_drive_folder_id() or DATASET_FOLDER_DEFAULT_ID
+            sheets = read_drive_sheets_by_name(dataset_name, dataset_folder_id)
             if "data" in sheets:
                 dataframe = sheets["data"].fillna("")
             elif sheets:

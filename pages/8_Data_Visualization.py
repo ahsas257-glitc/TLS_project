@@ -17,8 +17,8 @@ from services.google_drive import (
     extract_drive_file_id,
     find_drive_file_id_by_keywords,
     get_drive_folder_id,
-    get_drive_dataset_id,
     read_drive_sheets,
+    read_drive_sheets_by_name,
 )
 
 try:
@@ -58,10 +58,11 @@ XLSFORM_FOLDER_KEYWORDS = {
     "Tool 5": ("tool5", "classroom", "observation", "form"),
 }
 GOOGLE_DRIVE_DATASET_KEYS = [
-    "Tool 2 ECE Classroom Observation",
-    "Tool 3 ECE Parent Interview",
-    "Tool 5 TLS Classroom Observation",
+    "Tool 2 ECE Classroom Observation.xlsx",
+    "Tool 3 ECE Parent Interview.xlsx",
+    "Tool 5 TLS Classroom Observation.xlsx",
 ]
+DATASET_FOLDER_DEFAULT_ID = "1VFgsazs0OkRI5kmmrF1pXTr6RrPnu3hx"
 STRUCTURAL_TYPES = {
     "begin",
     "end",
@@ -2437,18 +2438,15 @@ processing_errors: list[str] = []
 
 for dataset_key in GOOGLE_DRIVE_DATASET_KEYS:
     try:
-        file_ref = get_drive_dataset_id(dataset_key)
-        file_id = extract_drive_file_id(file_ref)
-        if not file_id:
-            raise ValueError(f"`{dataset_key}` is missing in `GOOGLE_DRIVE_DATASET_IDS` secrets.")
-        sheets = read_drive_sheets(file_id)
+        dataset_folder_id = str(st.secrets.get("GOOGLE_DRIVE_DATASET_FOLDER_ID", "")).strip() or get_drive_folder_id() or DATASET_FOLDER_DEFAULT_ID
+        sheets = read_drive_sheets_by_name(dataset_key, dataset_folder_id)
         source_file_name = dataset_key
         sheet_name = default_sheet_name(sheets)
         raw_dataframe = sheets[sheet_name].copy().dropna(how="all")
         dataset_records.append(
             {
                 "source_name": source_file_name,
-                "display_name": dataset_key,
+                "display_name": dataset_key.rsplit(".", 1)[0],
                 "sheet_name": sheet_name,
                 "raw_rows": len(raw_dataframe),
                 "dataframe": prepare_dataset(raw_dataframe),
