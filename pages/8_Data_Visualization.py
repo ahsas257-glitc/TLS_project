@@ -923,38 +923,48 @@ def build_tool5_experience_duration_by_gender(dataframe: pd.DataFrame) -> pd.Dat
     return grouped.sort_values("Average Duration", ascending=False)
 
 
-def render_tool5_experience_duration_gender_chart(dataframe: pd.DataFrame) -> None:
+def render_tool5_experience_duration_gender_charts(dataframe: pd.DataFrame) -> None:
     chart_data = build_tool5_experience_duration_by_gender(dataframe)
     if chart_data.empty:
         return
 
-    max_value = float(chart_data["Average Duration"].max())
-    bars = (
-        alt.Chart(chart_data)
-        .mark_bar(cornerRadiusTopLeft=8, cornerRadiusTopRight=8, color="#06b6d4", opacity=0.88)
+    duration_long = chart_data.melt(
+        id_vars=["Respondent Gender", "Responses"],
+        value_vars=["Average Duration", "Median Duration"],
+        var_name="Metric",
+        value_name="Duration",
+    )
+    duration_max = float(duration_long["Duration"].max()) if not duration_long.empty else 0.0
+
+    left_chart = (
+        alt.Chart(duration_long)
+        .mark_bar(cornerRadiusTopRight=8, cornerRadiusBottomRight=8, opacity=0.9)
         .encode(
-            x=alt.X("Respondent Gender:N", title=None),
-            y=alt.Y("Average Duration:Q", title="Average Experience Duration", scale=alt.Scale(domain=[0, max(max_value * 1.25, 1)])),
-            tooltip=[
-                "Respondent Gender:N",
-                alt.Tooltip("Average Duration:Q", format=".2f"),
-                alt.Tooltip("Median Duration:Q", format=".2f"),
-                alt.Tooltip("Responses:Q", format=","),
-            ],
+            x=alt.X("Duration:Q", title="Duration", scale=alt.Scale(domain=[0, max(duration_max * 1.2, 1)])),
+            y=alt.Y("Respondent Gender:N", title=None, sort="-x"),
+            color=alt.Color("Metric:N", scale=alt.Scale(domain=["Average Duration", "Median Duration"], range=["#06b6d4", "#f97316"])),
+            xOffset=alt.XOffset("Metric:N"),
+            tooltip=["Respondent Gender:N", "Metric:N", alt.Tooltip("Duration:Q", format=".2f")],
         )
+        .properties(height=420, title="Tool 5 · Experience Duration (Avg vs Median)")
     )
-    points = (
+
+    right_chart = (
         alt.Chart(chart_data)
-        .mark_point(shape="diamond", size=190, color="#f97316", filled=True)
-        .encode(x="Respondent Gender:N", y=alt.Y("Median Duration:Q"), tooltip=[alt.Tooltip("Median Duration:Q", format=".2f")])
+        .mark_arc(innerRadius=78, outerRadius=128, cornerRadius=7, padAngle=0.02)
+        .encode(
+            theta=alt.Theta("Responses:Q"),
+            color=alt.Color("Respondent Gender:N", scale=alt.Scale(range=PALETTE), legend=alt.Legend(title="Respondent Gender")),
+            tooltip=["Respondent Gender:N", alt.Tooltip("Responses:Q", format=",")],
+        )
+        .properties(height=420, title="Tool 5 · Respondent Count by Gender")
     )
-    labels = (
-        alt.Chart(chart_data)
-        .mark_text(dy=-10, color=CHART_TEXT, font=CHART_FONT, fontWeight=900, fontSize=11)
-        .encode(x="Respondent Gender:N", y="Average Duration:Q", text=alt.Text("Average Duration:Q", format=".2f"))
-    )
-    chart = alt.layer(bars, points, labels).properties(height=430, title="Tool 5 · Respondent Experience Duration by Gender")
-    st.altair_chart(modernize_chart(chart), use_container_width=True)
+
+    left_col, right_col = st.columns(2, gap="large")
+    with left_col:
+        st.altair_chart(modernize_chart(left_chart), use_container_width=True)
+    with right_col:
+        st.altair_chart(modernize_chart(right_chart), use_container_width=True)
 
 
 def render_donut_chart(dataframe: pd.DataFrame, category: str, title: str, colors: list[str] | None = None) -> None:
@@ -2533,7 +2543,7 @@ def render_dataset_analysis(source_name: str, sheet_name: str, dataset: pd.DataF
             with tool5_right:
                 render_tool5_returnee_climate_chart(filtered)
             st.markdown("<div style='height: 24px;'></div>", unsafe_allow_html=True)
-            render_tool5_experience_duration_gender_chart(filtered)
+            render_tool5_experience_duration_gender_charts(filtered)
             st.markdown("<div style='height: 24px;'></div>", unsafe_allow_html=True)
         overview_left, overview_right = st.columns(2, gap="large")
         with overview_left:
