@@ -5,6 +5,7 @@ import math
 import re
 import warnings
 from itertools import combinations
+from pathlib import Path
 from typing import Any
 
 import altair as alt
@@ -43,6 +44,12 @@ XLSFORM_DRIVE_URLS = {
     "Tool 2": "https://docs.google.com/spreadsheets/d/1aVZlk87D3mAzX1xOal_dUck4g6PPMKsT/edit?usp=drive_link&ouid=118130531358947255257&rtpof=true&sd=true",
     "Tool 3": "https://docs.google.com/spreadsheets/d/1rRfvtePPii57vHUDuqVKquFPAZUb8vmT/edit?usp=drive_link&ouid=118130531358947255257&rtpof=true&sd=true",
     "Tool 5": "https://docs.google.com/spreadsheets/d/19k3U_Q7k37WTumJ2As6bFRTatzPzyyd9/edit?usp=drive_link&ouid=118130531358947255257&rtpof=true&sd=true",
+}
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+XLSFORM_LOCAL_PATHS = {
+    "Tool 2": PROJECT_ROOT / "xls_forms" / "ECE Tool2 Classroom Observation.xlsx",
+    "Tool 3": PROJECT_ROOT / "xls_forms" / "ECE_Tool3_Parent_Interview.xlsx",
+    "Tool 5": PROJECT_ROOT / "xls_forms" / "TLS_Tool5_Classroom_Observation.xlsx",
 }
 XLSFORM_FOLDER_DEFAULT_ID = "1yYmD9rTmjudFCJri9SMNnfW3-qEHWcVI"
 XLSFORM_FOLDER_KEYWORDS = {
@@ -150,7 +157,70 @@ def choice_list_name(type_value: object) -> str:
 def load_all_schemas() -> dict[str, dict[str, Any]]:
     schemas = {}
 
+    # Primary source: project-local xls_forms folder (Cloud-stable and matches local behavior).
+    for tool_key, local_path in XLSFORM_LOCAL_PATHS.items():
+        try:
+            if not local_path.exists():
+                continue
+            sheets = pd.read_excel(local_path, sheet_name=None)
+            survey = sheets.get("survey", pd.DataFrame()).fillna("")
+            choices = sheets.get("choices", pd.DataFrame()).fillna("")
+            settings = sheets.get("settings", pd.DataFrame()).fillna("")
+            if survey.empty:
+                continue
+
+            fields: list[dict[str, Any]] = []
+            for _, row in survey.iterrows():
+                name = clean_text(row.get("name", ""))
+                type_raw = clean_text(row.get("type", ""))
+                base_type = base_question_type(type_raw)
+                if not name or base_type in STRUCTURAL_TYPES:
+                    continue
+                label = clean_text(row.get("label:English", "")) or clean_text(row.get("label:Dari", "")) or name
+                fields.append(
+                    {
+                        "name": name,
+                        "name_key": normalize_key(name),
+                        "type": base_type,
+                        "type_raw": type_raw,
+                        "choice_list": choice_list_name(type_raw),
+                        "label": label,
+                        "required": str(row.get("required", "")).strip().lower() in {"true", "yes", "1"},
+                        "relevance": clean_text(row.get("relevance", "")),
+                    }
+                )
+
+            choice_labels: dict[str, dict[str, str]] = {}
+            if {"list_name", "value"}.issubset(choices.columns):
+                for _, row in choices.iterrows():
+                    list_name = clean_text(row.get("list_name", ""))
+                    value = canonical_value(row.get("value", ""))
+                    if not list_name or not value:
+                        continue
+                    label = clean_text(row.get("label:English", "")) or clean_text(row.get("label:Dari", "")) or value
+                    choice_labels.setdefault(list_name, {})[value] = label
+
+            form_title = ""
+            form_id = ""
+            if not settings.empty:
+                form_title = clean_text(settings.iloc[0].get("form_title", ""))
+                form_id = clean_text(settings.iloc[0].get("form_id", ""))
+
+            schemas[tool_key] = {
+                "tool_key": tool_key,
+                "form_title": form_title or tool_key,
+                "form_id": form_id,
+                "fields": fields,
+                "field_by_key": {field["name_key"]: field for field in fields},
+                "choice_labels": choice_labels,
+                "path": str(local_path),
+            }
+        except Exception:
+            continue
+
     for tool_key, url in XLSFORM_DRIVE_URLS.items():
+        if tool_key in schemas:
+            continue
         try:
             file_id = extract_drive_file_id(url)
             if not file_id:
