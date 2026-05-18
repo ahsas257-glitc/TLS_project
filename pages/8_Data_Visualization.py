@@ -1173,6 +1173,138 @@ def render_tool5_priority_columns_deep_dive(dataframe: pd.DataFrame, schema: dic
         st.markdown("<div style='height: 14px;'></div>", unsafe_allow_html=True)
 
 
+def build_tool5_attendance_group_series(dataframe: pd.DataFrame) -> pd.DataFrame:
+    group_column = first_existing_column(
+        dataframe,
+        [
+            "returnee_host_present",
+            "Returnee_host_present",
+            "student_group",
+            "student_type",
+            "group_type",
+        ],
+    )
+    if not group_column:
+        group_column = first_column_by_keywords(dataframe, ["returnee", "host"])
+
+    day_columns = {
+        "Day 1": {
+            "male": first_existing_column(dataframe, ["day1_present_male"]),
+            "female": first_existing_column(dataframe, ["day1_present_female"]),
+            "total": first_existing_column(dataframe, ["day1_total_present"]),
+            "percent": first_existing_column(dataframe, ["day1_present_percent"]),
+        },
+        "Day 2": {
+            "male": first_existing_column(dataframe, ["day2_present_male"]),
+            "female": first_existing_column(dataframe, ["day2_present_female"]),
+            "total": first_existing_column(dataframe, ["day2_total_present"]),
+            "percent": first_existing_column(dataframe, ["day2_present_percent"]),
+        },
+        "Day 3": {
+            "male": first_existing_column(dataframe, ["day3_present_male"]),
+            "female": first_existing_column(dataframe, ["day3_present_female"]),
+            "total": first_existing_column(dataframe, ["day3_total_present"]),
+            "percent": None,
+        },
+    }
+
+    if dataframe.empty or not group_column:
+        return pd.DataFrame(columns=["Group", "Day", "Male", "Female", "Total", "Present %"])
+
+    work = dataframe.copy()
+    group_text = work[group_column].fillna("").astype(str).str.strip().str.lower()
+    work["Group"] = np.where(group_text.str.contains("return"), "Returnee", np.where(group_text.str.contains("host"), "Host", "Unknown"))
+    work = work[work["Group"].isin(["Host", "Returnee"])]
+    if work.empty:
+        return pd.DataFrame(columns=["Group", "Day", "Male", "Female", "Total", "Present %"])
+
+    rows: list[dict[str, Any]] = []
+    for group_name in ["Host", "Returnee"]:
+        subset = work[work["Group"] == group_name]
+        if subset.empty:
+            continue
+        for day_name, cols in day_columns.items():
+            male_col = cols["male"]
+            female_col = cols["female"]
+            total_col = cols["total"]
+            pct_col = cols["percent"]
+            male_sum = pd.to_numeric(subset[male_col], errors="coerce").fillna(0).sum() if male_col else 0.0
+            female_sum = pd.to_numeric(subset[female_col], errors="coerce").fillna(0).sum() if female_col else 0.0
+            total_sum = pd.to_numeric(subset[total_col], errors="coerce").fillna(0).sum() if total_col else (male_sum + female_sum)
+            if pct_col:
+                pct_values = pd.to_numeric(subset[pct_col], errors="coerce")
+                present_pct = float(pct_values.dropna().mean()) if pct_values.notna().any() else (float((total_sum / max(male_sum + female_sum, 1)) * 100))
+            else:
+                present_pct = float((total_sum / max(male_sum + female_sum, 1)) * 100) if (male_sum + female_sum) > 0 else 0.0
+            rows.append(
+                {
+                    "Group": group_name,
+                    "Day": day_name,
+                    "Male": float(male_sum),
+                    "Female": float(female_sum),
+                    "Total": float(total_sum),
+                    "Present %": round(present_pct, 2),
+                }
+            )
+    return pd.DataFrame(rows)
+
+
+def render_tool5_attendance_host_returnee_charts(dataframe: pd.DataFrame) -> None:
+    attendance = build_tool5_attendance_group_series(dataframe)
+    if attendance.empty:
+        return
+
+    st.markdown("### Tool 5 Attendance Trend (Host vs Returnee)")
+    left_col, right_col = st.columns(2, gap="large")
+    for group_name, container in [("Host", left_col), ("Returnee", right_col)]:
+        group_data = attendance[attendance["Group"] == group_name].copy()
+        if group_data.empty:
+            continue
+        long_counts = group_data.melt(
+            id_vars=["Day", "Present %"],
+            value_vars=["Male", "Female"],
+            var_name="Gender",
+            value_name="Students",
+        )
+        count_max = float(max(group_data["Total"].max(), long_counts["Students"].max(), 1))
+        line_max = float(max(group_data["Present %"].max(), 1))
+        with container:
+            bars = (
+                alt.Chart(long_counts)
+                .mark_bar(cornerRadiusTopLeft=7, cornerRadiusTopRight=7, opacity=0.9)
+                .encode(
+                    x=alt.X("Day:N", title=None),
+                    y=alt.Y("Students:Q", title="Present Students", scale=alt.Scale(domain=[0, count_max * 1.25])),
+                    color=alt.Color("Gender:N", scale=alt.Scale(domain=["Male", "Female"], range=["#38bdf8", "#f97316"])),
+                    xOffset=alt.XOffset("Gender:N"),
+                    tooltip=["Day:N", "Gender:N", alt.Tooltip("Students:Q", format=",")],
+                )
+            )
+            total_line = (
+                alt.Chart(group_data)
+                .mark_line(point=alt.OverlayMarkDef(size=90, filled=True), color="#22c55e", strokeWidth=2.6)
+                .encode(
+                    x=alt.X("Day:N", title=None),
+                    y=alt.Y("Total:Q", title="Total Present", scale=alt.Scale(domain=[0, count_max * 1.25])),
+                    tooltip=["Day:N", alt.Tooltip("Total:Q", format=",")],
+                )
+            )
+            pct_line = (
+                alt.Chart(group_data)
+                .mark_line(point=alt.OverlayMarkDef(size=80, filled=True), color="#a78bfa", strokeDash=[7, 5], strokeWidth=2.3)
+                .encode(
+                    x=alt.X("Day:N", title=None),
+                    y=alt.Y("Present %:Q", title="Present %", axis=alt.Axis(orient="right"), scale=alt.Scale(domain=[0, max(line_max * 1.2, 100)])),
+                    tooltip=["Day:N", alt.Tooltip("Present %:Q", format=".2f")],
+                )
+            )
+            chart = alt.layer(bars, total_line, pct_line).resolve_scale(y="independent").properties(
+                height=430,
+                title=f"Tool 5 · {group_name} Attendance (Day 1-3)",
+            )
+            st.altair_chart(modernize_chart(chart), use_container_width=True)
+
+
 def render_donut_chart(dataframe: pd.DataFrame, category: str, title: str, colors: list[str] | None = None) -> None:
     if dataframe.empty or category not in dataframe.columns or "Count" not in dataframe.columns:
         st.info("No data is available for this chart.")
@@ -2757,6 +2889,8 @@ def render_dataset_analysis(source_name: str, sheet_name: str, dataset: pd.DataF
             render_tool5_host_students_circular_charts(filtered)
             st.markdown("<div style='height: 24px;'></div>", unsafe_allow_html=True)
             render_tool5_experience_duration_gender_charts(filtered)
+            st.markdown("<div style='height: 24px;'></div>", unsafe_allow_html=True)
+            render_tool5_attendance_host_returnee_charts(filtered)
             st.markdown("<div style='height: 24px;'></div>", unsafe_allow_html=True)
             render_tool5_priority_columns_deep_dive(filtered, schema)
             st.markdown("<div style='height: 24px;'></div>", unsafe_allow_html=True)
