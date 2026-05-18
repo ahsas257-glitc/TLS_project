@@ -2407,9 +2407,11 @@ apply_liquid_glass_theme(
 
 schemas = load_all_schemas()
 if not schemas:
-    st.warning(
-        "No XLSForm schemas were found in `/XLS_Form`. Running in Generic mode so visualization still works."
+    st.error(
+        "XLSForm schemas could not be loaded from Google Drive. "
+        "Please verify Google Drive API, file sharing permissions, and the configured file links."
     )
+    st.stop()
 
 render_glass_section(
     "Dataset Source",
