@@ -196,12 +196,33 @@ def find_drive_file_id_by_keywords(folder_id: str, keywords: tuple[str, ...]) ->
 
 
 def read_drive_sheets(file_id: str) -> dict[str, pd.DataFrame]:
-    content = read_drive_file_bytes(file_id)
-    name = read_drive_file_name(file_id).lower()
-    buffer = BytesIO(content)
-    if name.endswith(".csv"):
-        return {"CSV": pd.read_csv(buffer)}
-    return {str(sheet_name): frame for sheet_name, frame in pd.read_excel(buffer, sheet_name=None).items()}
+    try:
+        content = read_drive_file_bytes(file_id)
+        name = read_drive_file_name(file_id).lower()
+        buffer = BytesIO(content)
+        if name.endswith(".csv"):
+            return {"CSV": pd.read_csv(buffer)}
+        return {str(sheet_name): frame for sheet_name, frame in pd.read_excel(buffer, sheet_name=None).items()}
+    except Exception:
+        # Fallback path when Drive API listing/download is disabled:
+        # read directly via Google Sheets API (requires sheet shared with service account).
+        try:
+            from services.google_sheets import get_gspread_client
+
+            client = get_gspread_client()
+            spreadsheet = client.open_by_key(file_id)
+            frames: dict[str, pd.DataFrame] = {}
+            for worksheet in spreadsheet.worksheets():
+                values = worksheet.get_all_values()
+                if not values:
+                    frames[worksheet.title] = pd.DataFrame()
+                    continue
+                headers = [str(cell).strip() for cell in values[0]]
+                rows = values[1:] if len(values) > 1 else []
+                frames[worksheet.title] = pd.DataFrame(rows, columns=headers)
+            return frames
+        except Exception as exc:
+            raise GoogleDriveConnectionError(f"Unable to load spreadsheet by key `{file_id}`: {exc}") from exc
 
 
 def read_drive_sheets_by_name(file_name: str, folder_id: str) -> dict[str, pd.DataFrame]:

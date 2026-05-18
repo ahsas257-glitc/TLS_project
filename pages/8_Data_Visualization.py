@@ -14,10 +14,8 @@ import streamlit as st
 from services.ui_theme import apply_liquid_glass_theme, render_glass_section
 from services.google_drive import (
     extract_drive_file_id,
-    find_drive_file_id_by_keywords,
-    get_drive_folder_id,
+    get_drive_dataset_id,
     read_drive_sheets,
-    read_drive_sheets_by_name,
 )
 
 try:
@@ -39,26 +37,16 @@ except ImportError:  # Streamlit can still render a standard map without pydeck 
     pdk = None
 
 
-XLSFORM_DRIVE_FILES = {
-    "Tool 2": "ECE Tool2 Classroom Observation_Form.xlsx",
-    "Tool 3": "ECE_Tool3_Parent_Interview_Form.xlsx",
-    "Tool 5": "TLS_Tool5_Classroom_Observation_Form.xlsx",
-}
 XLSFORM_DRIVE_URLS = {
     "Tool 2": "https://docs.google.com/spreadsheets/d/1aVZlk87D3mAzX1xOal_dUck4g6PPMKsT/edit?usp=drive_link&ouid=118130531358947255257&rtpof=true&sd=true",
     "Tool 3": "https://docs.google.com/spreadsheets/d/1rRfvtePPii57vHUDuqVKquFPAZUb8vmT/edit?usp=drive_link&ouid=118130531358947255257&rtpof=true&sd=true",
     "Tool 5": "https://docs.google.com/spreadsheets/d/19k3U_Q7k37WTumJ2As6bFRTatzPzyyd9/edit?usp=drive_link&ouid=118130531358947255257&rtpof=true&sd=true",
 }
-GOOGLE_DRIVE_DATASET_FILES = [
-    "ECE Tool2 Classroom Observation_Form.xlsx",
-    "ECE_Tool3_Parent_Interview_Form.xlsx",
-    "TLS_Tool5_Classroom_Observation_Form.xlsx",
+GOOGLE_DRIVE_DATASET_KEYS = [
+    "Tool 2 ECE Classroom Observation",
+    "Tool 3 ECE Parent Interview",
+    "Tool 5 TLS Classroom Observation",
 ]
-DATASET_FILE_KEYWORDS = {
-    "ECE Tool2 Classroom Observation_Form.xlsx": ("tool2", "classroom", "observation"),
-    "ECE_Tool3_Parent_Interview_Form.xlsx": ("tool3", "parent", "interview"),
-    "TLS_Tool5_Classroom_Observation_Form.xlsx": ("tool5", "classroom", "observation"),
-}
 STRUCTURAL_TYPES = {
     "begin",
     "end",
@@ -153,7 +141,6 @@ def choice_list_name(type_value: object) -> str:
 @st.cache_data(ttl=900, show_spinner=False)
 def load_all_schemas() -> dict[str, dict[str, Any]]:
     schemas = {}
-    folder_id = get_drive_folder_id()
 
     for tool_key, url in XLSFORM_DRIVE_URLS.items():
         try:
@@ -215,121 +202,6 @@ def load_all_schemas() -> dict[str, dict[str, Any]]:
             }
         except Exception:
             continue
-
-    if folder_id:
-        for tool_key, file_name in XLSFORM_DRIVE_FILES.items():
-            if tool_key in schemas:
-                continue
-            try:
-                sheets = read_drive_sheets_by_name(file_name, folder_id)
-                survey = sheets.get("survey", pd.DataFrame()).fillna("")
-                choices = sheets.get("choices", pd.DataFrame()).fillna("")
-                settings = sheets.get("settings", pd.DataFrame()).fillna("")
-                if survey.empty:
-                    continue
-
-                fields: list[dict[str, Any]] = []
-                for _, row in survey.iterrows():
-                    name = clean_text(row.get("name", ""))
-                    type_raw = clean_text(row.get("type", ""))
-                    base_type = base_question_type(type_raw)
-                    if not name or base_type in STRUCTURAL_TYPES:
-                        continue
-                    label = clean_text(row.get("label:English", "")) or clean_text(row.get("label:Dari", "")) or name
-                    fields.append(
-                        {
-                            "name": name,
-                            "name_key": normalize_key(name),
-                            "type": base_type,
-                            "type_raw": type_raw,
-                            "choice_list": choice_list_name(type_raw),
-                            "label": label,
-                            "required": str(row.get("required", "")).strip().lower() in {"true", "yes", "1"},
-                            "relevance": clean_text(row.get("relevance", "")),
-                        }
-                    )
-
-                choice_labels: dict[str, dict[str, str]] = {}
-                if {"list_name", "value"}.issubset(choices.columns):
-                    for _, row in choices.iterrows():
-                        list_name = clean_text(row.get("list_name", ""))
-                        value = canonical_value(row.get("value", ""))
-                        if not list_name or not value:
-                            continue
-                        label = clean_text(row.get("label:English", "")) or clean_text(row.get("label:Dari", "")) or value
-                        choice_labels.setdefault(list_name, {})[value] = label
-
-                form_title = ""
-                form_id = ""
-                if not settings.empty:
-                    form_title = clean_text(settings.iloc[0].get("form_title", ""))
-                    form_id = clean_text(settings.iloc[0].get("form_id", ""))
-
-                schemas[tool_key] = {
-                    "tool_key": tool_key,
-                    "form_title": form_title or tool_key,
-                    "form_id": form_id,
-                    "fields": fields,
-                    "field_by_key": {field["name_key"]: field for field in fields},
-                    "choice_labels": choice_labels,
-                    "path": f"gdrive://{folder_id}/{file_name}",
-                }
-            except Exception:
-                try:
-                    file_id = find_drive_file_id_by_keywords(folder_id, DATASET_FILE_KEYWORDS.get(file_name, tuple()))
-                    if not file_id:
-                        continue
-                    sheets = read_drive_sheets(file_id)
-                    survey = sheets.get("survey", pd.DataFrame()).fillna("")
-                    choices = sheets.get("choices", pd.DataFrame()).fillna("")
-                    settings = sheets.get("settings", pd.DataFrame()).fillna("")
-                    if survey.empty:
-                        continue
-                    fields: list[dict[str, Any]] = []
-                    for _, row in survey.iterrows():
-                        name = clean_text(row.get("name", ""))
-                        type_raw = clean_text(row.get("type", ""))
-                        base_type = base_question_type(type_raw)
-                        if not name or base_type in STRUCTURAL_TYPES:
-                            continue
-                        label = clean_text(row.get("label:English", "")) or clean_text(row.get("label:Dari", "")) or name
-                        fields.append(
-                            {
-                                "name": name,
-                                "name_key": normalize_key(name),
-                                "type": base_type,
-                                "type_raw": type_raw,
-                                "choice_list": choice_list_name(type_raw),
-                                "label": label,
-                                "required": str(row.get("required", "")).strip().lower() in {"true", "yes", "1"},
-                                "relevance": clean_text(row.get("relevance", "")),
-                            }
-                        )
-                    choice_labels: dict[str, dict[str, str]] = {}
-                    if {"list_name", "value"}.issubset(choices.columns):
-                        for _, row in choices.iterrows():
-                            list_name = clean_text(row.get("list_name", ""))
-                            value = canonical_value(row.get("value", ""))
-                            if not list_name or not value:
-                                continue
-                            label = clean_text(row.get("label:English", "")) or clean_text(row.get("label:Dari", "")) or value
-                            choice_labels.setdefault(list_name, {})[value] = label
-                    form_title = ""
-                    form_id = ""
-                    if not settings.empty:
-                        form_title = clean_text(settings.iloc[0].get("form_title", ""))
-                        form_id = clean_text(settings.iloc[0].get("form_id", ""))
-                    schemas[tool_key] = {
-                        "tool_key": tool_key,
-                        "form_title": form_title or tool_key,
-                        "form_id": form_id,
-                        "fields": fields,
-                        "field_by_key": {field["name_key"]: field for field in fields},
-                        "choice_labels": choice_labels,
-                        "path": f"gdrive://{file_id}",
-                    }
-                except Exception:
-                    continue
 
     return schemas
 
@@ -2421,35 +2293,27 @@ render_glass_section(
 dataset_records: list[dict[str, Any]] = []
 processing_errors: list[str] = []
 
-folder_id = get_drive_folder_id()
-if not folder_id:
-    processing_errors.append("`GOOGLE_DRIVE_FOLDER_ID` (or folder URL) is missing in secrets.")
-
-for file_name in GOOGLE_DRIVE_DATASET_FILES:
+for dataset_key in GOOGLE_DRIVE_DATASET_KEYS:
     try:
-        if not folder_id:
-            break
-        try:
-            sheets = read_drive_sheets_by_name(file_name, folder_id)
-        except Exception:
-            file_id = find_drive_file_id_by_keywords(folder_id, DATASET_FILE_KEYWORDS.get(file_name, tuple()))
-            if not file_id:
-                raise
-            sheets = read_drive_sheets(file_id)
-        source_file_name = file_name
+        file_ref = get_drive_dataset_id(dataset_key)
+        file_id = extract_drive_file_id(file_ref)
+        if not file_id:
+            raise ValueError(f"`{dataset_key}` is missing in `GOOGLE_DRIVE_DATASET_IDS` secrets.")
+        sheets = read_drive_sheets(file_id)
+        source_file_name = dataset_key
         sheet_name = default_sheet_name(sheets)
         raw_dataframe = sheets[sheet_name].copy().dropna(how="all")
         dataset_records.append(
             {
                 "source_name": source_file_name,
-                "display_name": file_name.rsplit(".", 1)[0],
+                "display_name": dataset_key,
                 "sheet_name": sheet_name,
                 "raw_rows": len(raw_dataframe),
                 "dataframe": prepare_dataset(raw_dataframe),
             }
         )
     except Exception as exc:
-        processing_errors.append(f"{file_name}: {exc}")
+        processing_errors.append(f"{dataset_key}: {exc}")
 
 if processing_errors:
     st.warning("Some datasets could not be processed: " + " | ".join(processing_errors))
