@@ -14,7 +14,7 @@ import pandas as pd
 import streamlit as st
 
 from services.ui_theme import apply_liquid_glass_theme, render_glass_section
-from services.google_drive import get_drive_folder_id, read_drive_sheets_by_name
+from services.google_drive import extract_drive_file_id, get_drive_folder_id, read_drive_sheets, read_drive_sheets_by_name
 
 try:
     import streamlit.components.v1 as components
@@ -35,10 +35,21 @@ except ImportError:  # Streamlit can still render a standard map without pydeck 
     pdk = None
 
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 XLSFORM_PATHS = {
-    "Tool 2": Path(r"C:\Users\LENOVO\Desktop\TLS\XLS_Form\ECE Tool2 Classroom Observation.xlsx"),
-    "Tool 3": Path(r"C:\Users\LENOVO\Desktop\TLS\XLS_Form\ECE_Tool3_Parent_Interview.xlsx"),
-    "Tool 5": Path(r"C:\Users\LENOVO\Desktop\TLS\XLS_Form\TLS_Tool5_Classroom_Observation.xlsx"),
+    "Tool 2": PROJECT_ROOT / "XLS_Form" / "ECE Tool2 Classroom Observation.xlsx",
+    "Tool 3": PROJECT_ROOT / "XLS_Form" / "ECE_Tool3_Parent_Interview.xlsx",
+    "Tool 5": PROJECT_ROOT / "XLS_Form" / "TLS_Tool5_Classroom_Observation.xlsx",
+}
+XLSFORM_DRIVE_FILES = {
+    "Tool 2": "ECE Tool2 Classroom Observation.xlsx",
+    "Tool 3": "ECE_Tool3_Parent_Interview.xlsx",
+    "Tool 5": "TLS_Tool5_Classroom_Observation.xlsx",
+}
+XLSFORM_DRIVE_URLS = {
+    "Tool 2": "https://docs.google.com/spreadsheets/d/1aVZlk87D3mAzX1xOal_dUck4g6PPMKsT/edit?usp=drive_link&ouid=118130531358947255257&rtpof=true&sd=true",
+    "Tool 3": "https://docs.google.com/spreadsheets/d/1rRfvtePPii57vHUDuqVKquFPAZUb8vmT/edit?usp=drive_link&ouid=118130531358947255257&rtpof=true&sd=true",
+    "Tool 5": "https://docs.google.com/spreadsheets/d/19k3U_Q7k37WTumJ2As6bFRTatzPzyyd9/edit?usp=drive_link&ouid=118130531358947255257&rtpof=true&sd=true",
 }
 GOOGLE_DRIVE_DATASET_FILES = [
     "Tool 2 ECE Classroom Observation.xlsx",
@@ -193,10 +204,163 @@ def load_xlsform_schema(path_text: str, tool_key: str) -> dict[str, Any]:
 
 def load_all_schemas() -> dict[str, dict[str, Any]]:
     schemas = {}
-    for tool_key, path in XLSFORM_PATHS.items():
-        if path.exists():
-            schemas[tool_key] = load_xlsform_schema(str(path), tool_key)
+    folder_id = get_drive_folder_id()
+
+    for tool_key, url in XLSFORM_DRIVE_URLS.items():
+        try:
+            file_id = extract_drive_file_id(url)
+            if not file_id:
+                continue
+            sheets = read_drive_sheets(file_id)
+            survey = sheets.get("survey", pd.DataFrame()).fillna("")
+            choices = sheets.get("choices", pd.DataFrame()).fillna("")
+            settings = sheets.get("settings", pd.DataFrame()).fillna("")
+            if survey.empty:
+                continue
+
+            fields: list[dict[str, Any]] = []
+            for _, row in survey.iterrows():
+                name = clean_text(row.get("name", ""))
+                type_raw = clean_text(row.get("type", ""))
+                base_type = base_question_type(type_raw)
+                if not name or base_type in STRUCTURAL_TYPES:
+                    continue
+                label = clean_text(row.get("label:English", "")) or clean_text(row.get("label:Dari", "")) or name
+                fields.append(
+                    {
+                        "name": name,
+                        "name_key": normalize_key(name),
+                        "type": base_type,
+                        "type_raw": type_raw,
+                        "choice_list": choice_list_name(type_raw),
+                        "label": label,
+                        "required": str(row.get("required", "")).strip().lower() in {"true", "yes", "1"},
+                        "relevance": clean_text(row.get("relevance", "")),
+                    }
+                )
+
+            choice_labels: dict[str, dict[str, str]] = {}
+            if {"list_name", "value"}.issubset(choices.columns):
+                for _, row in choices.iterrows():
+                    list_name = clean_text(row.get("list_name", ""))
+                    value = canonical_value(row.get("value", ""))
+                    if not list_name or not value:
+                        continue
+                    label = clean_text(row.get("label:English", "")) or clean_text(row.get("label:Dari", "")) or value
+                    choice_labels.setdefault(list_name, {})[value] = label
+
+            form_title = ""
+            form_id = ""
+            if not settings.empty:
+                form_title = clean_text(settings.iloc[0].get("form_title", ""))
+                form_id = clean_text(settings.iloc[0].get("form_id", ""))
+
+            schemas[tool_key] = {
+                "tool_key": tool_key,
+                "form_title": form_title or tool_key,
+                "form_id": form_id,
+                "fields": fields,
+                "field_by_key": {field["name_key"]: field for field in fields},
+                "choice_labels": choice_labels,
+                "path": f"gdrive://{file_id}",
+            }
+        except Exception:
+            continue
+
+    if folder_id:
+        for tool_key, file_name in XLSFORM_DRIVE_FILES.items():
+            if tool_key in schemas:
+                continue
+            try:
+                sheets = read_drive_sheets_by_name(file_name, folder_id)
+                survey = sheets.get("survey", pd.DataFrame()).fillna("")
+                choices = sheets.get("choices", pd.DataFrame()).fillna("")
+                settings = sheets.get("settings", pd.DataFrame()).fillna("")
+                if survey.empty:
+                    continue
+
+                fields: list[dict[str, Any]] = []
+                for _, row in survey.iterrows():
+                    name = clean_text(row.get("name", ""))
+                    type_raw = clean_text(row.get("type", ""))
+                    base_type = base_question_type(type_raw)
+                    if not name or base_type in STRUCTURAL_TYPES:
+                        continue
+                    label = clean_text(row.get("label:English", "")) or clean_text(row.get("label:Dari", "")) or name
+                    fields.append(
+                        {
+                            "name": name,
+                            "name_key": normalize_key(name),
+                            "type": base_type,
+                            "type_raw": type_raw,
+                            "choice_list": choice_list_name(type_raw),
+                            "label": label,
+                            "required": str(row.get("required", "")).strip().lower() in {"true", "yes", "1"},
+                            "relevance": clean_text(row.get("relevance", "")),
+                        }
+                    )
+
+                choice_labels: dict[str, dict[str, str]] = {}
+                if {"list_name", "value"}.issubset(choices.columns):
+                    for _, row in choices.iterrows():
+                        list_name = clean_text(row.get("list_name", ""))
+                        value = canonical_value(row.get("value", ""))
+                        if not list_name or not value:
+                            continue
+                        label = clean_text(row.get("label:English", "")) or clean_text(row.get("label:Dari", "")) or value
+                        choice_labels.setdefault(list_name, {})[value] = label
+
+                form_title = ""
+                form_id = ""
+                if not settings.empty:
+                    form_title = clean_text(settings.iloc[0].get("form_title", ""))
+                    form_id = clean_text(settings.iloc[0].get("form_id", ""))
+
+                schemas[tool_key] = {
+                    "tool_key": tool_key,
+                    "form_title": form_title or tool_key,
+                    "form_id": form_id,
+                    "fields": fields,
+                    "field_by_key": {field["name_key"]: field for field in fields},
+                    "choice_labels": choice_labels,
+                    "path": f"gdrive://{folder_id}/{file_name}",
+                }
+            except Exception:
+                continue
+
+    if len(schemas) < len(XLSFORM_PATHS):
+        for tool_key, path in XLSFORM_PATHS.items():
+            if tool_key in schemas:
+                continue
+            if path.exists():
+                schemas[tool_key] = load_xlsform_schema(str(path), tool_key)
     return schemas
+
+
+def build_generic_schema(dataframe: pd.DataFrame, title: str = "Generic") -> dict[str, Any]:
+    fields: list[dict[str, Any]] = []
+    for column in dataframe.columns:
+        fields.append(
+            {
+                "name": str(column),
+                "name_key": normalize_key(column),
+                "type": infer_type(dataframe[column]),
+                "type_raw": infer_type(dataframe[column]),
+                "choice_list": "",
+                "label": str(column),
+                "required": False,
+                "relevance": "",
+            }
+        )
+    return {
+        "tool_key": "Generic",
+        "form_title": title,
+        "form_id": "generic",
+        "fields": fields,
+        "field_by_key": {field["name_key"]: field for field in fields},
+        "choice_labels": {},
+        "path": "auto-generated",
+    }
 
 
 def read_uploaded_sheets(uploaded_file) -> dict[str, pd.DataFrame]:
@@ -243,6 +407,20 @@ def is_rejection_status_column(column: str) -> bool:
 
 
 def detect_tool(dataframe: pd.DataFrame, file_name: str, schemas: dict[str, dict[str, Any]]) -> tuple[str | None, pd.DataFrame]:
+    if not schemas:
+        return "Generic", pd.DataFrame(
+            [
+                {
+                    "Tool": "Generic",
+                    "Form Title": "Auto schema (no XLSForm)",
+                    "Matched Fields": len(dataframe.columns),
+                    "Required Matched": 0,
+                    "Schema Fields": len(dataframe.columns),
+                    "Coverage %": 100.0 if len(dataframe.columns) else 0.0,
+                    "Score": float(len(dataframe.columns)),
+                }
+            ]
+        )
     column_keys = {normalize_key(column) for column in dataframe.columns}
     rows = []
     file_key = normalize_key(file_name)
@@ -2023,6 +2201,9 @@ def build_dataset_summary_row(source_name: str, sheet_name: str, dataframe: pd.D
 
 
 def render_dataset_analysis(source_name: str, sheet_name: str, dataset: pd.DataFrame, schemas: dict[str, dict[str, Any]], widget_key: str, raw_rows: int | None = None) -> None:
+    if not schemas:
+        schemas = {"Generic": build_generic_schema(dataset, "Auto schema (no XLSForm)")}
+
     detected_tool, detection_scorecard = detect_tool(dataset, source_name, schemas)
     if detected_tool is None:
         st.error(f"`{source_name}` could not be matched to Tool 2, Tool 3, or Tool 5.")
@@ -2240,8 +2421,9 @@ apply_liquid_glass_theme(
 
 schemas = load_all_schemas()
 if not schemas:
-    st.error("No XLSForm schemas were found in the configured XLS_Form folder.")
-    st.stop()
+    st.warning(
+        "No XLSForm schemas were found in `/XLS_Form`. Running in Generic mode so visualization still works."
+    )
 
 render_glass_section(
     "Dataset Upload",

@@ -87,6 +87,27 @@ def get_drive_folder_id() -> str:
     return _extract_folder_id(str(folder_value))
 
 
+def extract_drive_file_id(file_value: str) -> str:
+    value = str(file_value).strip()
+    if not value:
+        return ""
+    if "/d/" in value:
+        try:
+            after = value.split("/d/", 1)[1]
+            return after.split("/", 1)[0].split("?", 1)[0].strip()
+        except Exception:
+            return ""
+    if "id=" in value:
+        try:
+            parsed = urlparse(value)
+            query = parse_qs(parsed.query)
+            if "id" in query and query["id"]:
+                return str(query["id"][0]).strip()
+        except Exception:
+            return ""
+    return value
+
+
 def _authorized_get(url: str, params: dict[str, Any] | None = None) -> requests.Response:
     credentials = get_drive_credentials()
     token = credentials.token
