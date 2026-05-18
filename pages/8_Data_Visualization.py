@@ -468,6 +468,27 @@ def first_existing_column(dataframe: pd.DataFrame, candidates: list[str]) -> str
     return None
 
 
+def first_column_by_keywords(dataframe: pd.DataFrame, keywords: list[str]) -> str | None:
+    if dataframe.empty:
+        return None
+    normalized_keywords = [normalize_key(keyword) for keyword in keywords if normalize_key(keyword)]
+    if not normalized_keywords:
+        return None
+    for column in dataframe.columns:
+        column_key = normalize_key(column)
+        if all(keyword in column_key for keyword in normalized_keywords):
+            return column
+    return None
+
+
+def parse_returnee_series(series: pd.Series) -> pd.Series:
+    text = series.fillna("").astype(str).str.strip()
+    # Keep primary numeric signal from values like "12", "12.0", "12 students", "12,5"
+    extracted = text.str.replace(",", ".", regex=False).str.extract(r"(-?\d+(?:\.\d+)?)")[0]
+    values = pd.to_numeric(extracted, errors="coerce").fillna(0)
+    return values
+
+
 def profile_columns(dataframe: pd.DataFrame, schema: dict[str, Any]) -> pd.DataFrame:
     rows = []
     total = len(dataframe)
@@ -744,15 +765,30 @@ def render_tool5_tpm_duplicate_chart(dataframe: pd.DataFrame) -> None:
 def build_tool5_returnee_zone_province(dataframe: pd.DataFrame) -> pd.DataFrame:
     returnee_column = first_existing_column(
         dataframe,
-        ["# of returnee students", "No of returnee students", "number of returnee students", "returnee_students"],
+        [
+            "# of returnee students",
+            "# of returnee students:",
+            "No of returnee students",
+            "No. of returnee students",
+            "number of returnee students",
+            "returnee_students",
+            "returnee student",
+            "returnee_students_total",
+        ],
     )
+    if not returnee_column:
+        returnee_column = first_column_by_keywords(dataframe, ["returnee", "student"])
     zone_column = first_existing_column(dataframe, ["Zone", "zone", "Region", "region"])
+    if not zone_column:
+        zone_column = first_column_by_keywords(dataframe, ["zone"])
     province_column = first_existing_column(dataframe, ["Province", "province"])
+    if not province_column:
+        province_column = first_column_by_keywords(dataframe, ["province"])
     if not returnee_column or not zone_column or not province_column or dataframe.empty:
         return pd.DataFrame(columns=["Zone", "Province", "Returnee Students"])
 
     work = dataframe[[returnee_column, zone_column, province_column]].copy()
-    work["Returnee Students"] = pd.to_numeric(work[returnee_column], errors="coerce").fillna(0)
+    work["Returnee Students"] = parse_returnee_series(work[returnee_column])
     work["Zone"] = work[zone_column].fillna("Unknown").astype(str).str.strip().replace("", "Unknown")
     work["Province"] = work[province_column].fillna("Unknown").astype(str).str.strip().replace("", "Unknown")
     grouped = (
@@ -766,14 +802,27 @@ def build_tool5_returnee_zone_province(dataframe: pd.DataFrame) -> pd.DataFrame:
 def build_tool5_returnee_climate(dataframe: pd.DataFrame) -> pd.DataFrame:
     returnee_column = first_existing_column(
         dataframe,
-        ["# of returnee students", "No of returnee students", "number of returnee students", "returnee_students"],
+        [
+            "# of returnee students",
+            "# of returnee students:",
+            "No of returnee students",
+            "No. of returnee students",
+            "number of returnee students",
+            "returnee_students",
+            "returnee student",
+            "returnee_students_total",
+        ],
     )
+    if not returnee_column:
+        returnee_column = first_column_by_keywords(dataframe, ["returnee", "student"])
     climate_column = first_existing_column(dataframe, ["Climate", "climate"])
+    if not climate_column:
+        climate_column = first_column_by_keywords(dataframe, ["climate"])
     if not returnee_column or not climate_column or dataframe.empty:
         return pd.DataFrame(columns=["Climate", "Returnee Students"])
 
     work = dataframe[[returnee_column, climate_column]].copy()
-    work["Returnee Students"] = pd.to_numeric(work[returnee_column], errors="coerce").fillna(0)
+    work["Returnee Students"] = parse_returnee_series(work[returnee_column])
     work["Climate"] = work[climate_column].fillna("Unknown").astype(str).str.strip().replace("", "Unknown")
     grouped = (
         work.groupby("Climate", as_index=False)["Returnee Students"]
@@ -786,7 +835,6 @@ def build_tool5_returnee_climate(dataframe: pd.DataFrame) -> pd.DataFrame:
 def render_tool5_returnee_zone_province_chart(dataframe: pd.DataFrame) -> None:
     chart_data = build_tool5_returnee_zone_province(dataframe)
     if chart_data.empty:
-        st.info("No valid returnee-student values were found for Zone and Province.")
         return
     chart = (
         alt.Chart(chart_data)
@@ -805,7 +853,6 @@ def render_tool5_returnee_zone_province_chart(dataframe: pd.DataFrame) -> None:
 def render_tool5_returnee_climate_chart(dataframe: pd.DataFrame) -> None:
     chart_data = build_tool5_returnee_climate(dataframe)
     if chart_data.empty:
-        st.info("No valid returnee-student values were found for Climate.")
         return
     chart = (
         alt.Chart(chart_data)
