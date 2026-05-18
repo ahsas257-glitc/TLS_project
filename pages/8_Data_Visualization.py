@@ -2314,7 +2314,8 @@ def render_dataset_analysis(source_name: str, sheet_name: str, dataset: pd.DataF
             st.markdown("<div style='height: 24px;'></div>", unsafe_allow_html=True)
         overview_left, overview_right = st.columns(2, gap="large")
         with overview_left:
-            render_bar_chart(required_completeness(profile), "Column", "Required Field Completeness", "#22c55e", value_column="Completeness %")
+            if selected_tool != "Tool 5":
+                render_bar_chart(required_completeness(profile), "Column", "Required Field Completeness", "#22c55e", value_column="Completeness %")
         with overview_right:
             type_mix = profile.groupby("Type").size().reset_index(name="Count").sort_values("Count", ascending=False)
             render_donut_chart(type_mix, "Type", "Column Type Mix")
