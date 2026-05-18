@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from collections import OrderedDict
-from io import BytesIO
 import re
 
 import altair as alt
@@ -203,84 +202,47 @@ def render_donut_chart(dataframe: pd.DataFrame, category: str, title: str, color
     st.altair_chart(modernize_chart(alt.layer(arc, center).properties(height=CHART_HEIGHT, title=title)), use_container_width=True)
 
 
-@st.cache_data(ttl=180, show_spinner=False)
-def read_uploaded_file_bytes(file_name: str, file_bytes: bytes) -> pd.DataFrame:
-    buffer = BytesIO(file_bytes)
-    lowered = file_name.lower()
-    if lowered.endswith(".csv"):
-        return pd.read_csv(buffer)
-    if lowered.endswith(".xlsx") or lowered.endswith(".xls"):
-        return pd.read_excel(buffer)
-    raise ValueError("Only CSV and Excel files are supported.")
-
-
-def build_dataset_index(uploaded_files: list, use_drive_datasets: bool) -> tuple[dict[str, dict[str, str]], list[str], list[str]]:
+def build_dataset_index() -> tuple[dict[str, dict[str, str]], list[str], list[str]]:
     dataset_index: OrderedDict[str, dict[str, str]] = OrderedDict()
     dataset_columns: OrderedDict[str, None] = OrderedDict()
     errors: list[str] = []
 
-    if use_drive_datasets:
-        folder_id = get_drive_folder_id()
-        if not folder_id:
-            errors.append("`GOOGLE_DRIVE_FOLDER_ID` (or folder URL) is missing in secrets.")
-        for dataset_name in GOOGLE_DRIVE_DATASET_FILES:
-            try:
-                if not folder_id:
-                    break
-                sheets = read_drive_sheets_by_name(dataset_name, folder_id)
-                if "data" in sheets:
-                    dataframe = sheets["data"].fillna("")
-                elif sheets:
-                    first_sheet = next(iter(sheets.keys()))
-                    dataframe = sheets[first_sheet].fillna("")
-                else:
-                    errors.append(f"{dataset_name}: no readable worksheet was found.")
-                    continue
+    folder_id = get_drive_folder_id()
+    if not folder_id:
+        errors.append("`GOOGLE_DRIVE_FOLDER_ID` (or folder URL) is missing in secrets.")
+        return {}, [], errors
 
-                key_column = first_existing_column(dataframe, ["KEY", "Key", "key", "_uuid", "uuid", "instanceid", "InstanceID"])
-                if not key_column:
-                    errors.append(f"{dataset_name}: KEY column was not found.")
-                    continue
-
-                for column in dataframe.columns:
-                    dataset_columns[to_text(column)] = None
-
-                for _, row in dataframe.iterrows():
-                    key = value_from_row(row, key_column)
-                    if not key:
-                        continue
-                    current = dataset_index.setdefault(key, {})
-                    for column in dataframe.columns:
-                        value = value_from_row(row, column)
-                        if value and not current.get(to_text(column)):
-                            current[to_text(column)] = value
-            except Exception as exc:
-                errors.append(f"{dataset_name}: {exc}")
-
-    for uploaded_file in uploaded_files:
+    for dataset_name in GOOGLE_DRIVE_DATASET_FILES:
         try:
-            dataframe = read_uploaded_file_bytes(uploaded_file.name, uploaded_file.getvalue()).fillna("")
-        except Exception as exc:
-            errors.append(f"{uploaded_file.name}: {exc}")
-            continue
-
-        key_column = first_existing_column(dataframe, ["KEY", "Key", "key", "_uuid", "uuid", "instanceid", "InstanceID"])
-        if not key_column:
-            errors.append(f"{uploaded_file.name}: KEY column was not found.")
-            continue
-
-        for column in dataframe.columns:
-            dataset_columns[to_text(column)] = None
-
-        for _, row in dataframe.iterrows():
-            key = value_from_row(row, key_column)
-            if not key:
+            sheets = read_drive_sheets_by_name(dataset_name, folder_id)
+            if "data" in sheets:
+                dataframe = sheets["data"].fillna("")
+            elif sheets:
+                first_sheet = next(iter(sheets.keys()))
+                dataframe = sheets[first_sheet].fillna("")
+            else:
+                errors.append(f"{dataset_name}: no readable worksheet was found.")
                 continue
-            current = dataset_index.setdefault(key, {})
+
+            key_column = first_existing_column(dataframe, ["KEY", "Key", "key", "_uuid", "uuid", "instanceid", "InstanceID"])
+            if not key_column:
+                errors.append(f"{dataset_name}: KEY column was not found.")
+                continue
+
             for column in dataframe.columns:
-                value = value_from_row(row, column)
-                if value and not current.get(to_text(column)):
-                    current[to_text(column)] = value
+                dataset_columns[to_text(column)] = None
+
+            for _, row in dataframe.iterrows():
+                key = value_from_row(row, key_column)
+                if not key:
+                    continue
+                current = dataset_index.setdefault(key, {})
+                for column in dataframe.columns:
+                    value = value_from_row(row, column)
+                    if value and not current.get(to_text(column)):
+                        current[to_text(column)] = value
+        except Exception as exc:
+            errors.append(f"{dataset_name}: {exc}")
     return dict(dataset_index), list(dataset_columns.keys()), errors
 
 
@@ -449,7 +411,7 @@ apply_liquid_glass_theme(
 
 render_glass_section(
     "Automated Call-Back Workflow",
-    "Rows with Call_back = True in QA_Log become Call-Back rows. Call_Back By is filled from QC By; Old_Value is read from uploaded datasets using KEY and Question.",
+    "Rows with Call_back = True in QA_Log become Call-Back rows. Call_Back By is filled from QC By; Old_Value is read automatically from Google Drive datasets using KEY and Question.",
 )
 
 try:
@@ -460,28 +422,18 @@ except GoogleSheetsConnectionError as exc:
 
 upload_left, upload_right = st.columns(2, gap="large")
 with upload_left:
-    use_drive_datasets = st.checkbox(
-        "Use Google Drive datasets automatically",
-        value=True,
-        help="Loads configured Tool 2/3/5 datasets from Google Drive for Old_Value lookup.",
-    )
-    uploaded_files = st.file_uploader(
-        "Import source datasets for Old_Value lookup (optional)",
-        type=["csv", "xlsx", "xls"],
-        accept_multiple_files=True,
-        help="Upload the original datasets that contain KEY and the question/label columns.",
-    )
+    st.info("Source datasets are loaded automatically from Google Drive.")
 
-dataset_index, dataset_columns, dataset_errors = build_dataset_index(uploaded_files or [], use_drive_datasets)
+dataset_index, dataset_columns, dataset_errors = build_dataset_index()
 base_call_back_rows, skipped_blank_keys = build_call_back_rows(qa_log, dataset_index)
 
 with upload_right:
     st.markdown("### Dataset lookup")
-    st.caption("Question must match a dataset column label. You can edit Question below before syncing.")
+    st.caption("Question must match a dataset column label loaded from Google Drive. You can edit Question below before syncing.")
     if dataset_columns:
         st.dataframe(pd.DataFrame({"Available dataset labels": dataset_columns}), use_container_width=True, hide_index=True, height=180)
     else:
-        st.info("Upload one or more datasets to enable Old_Value lookup.")
+        st.info("No dataset labels were loaded from Google Drive.")
 
 metric_cols = st.columns(4, gap="large")
 with metric_cols[0]:

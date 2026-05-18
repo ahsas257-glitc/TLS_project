@@ -5,8 +5,6 @@ import math
 import re
 import warnings
 from itertools import combinations
-from io import BytesIO
-from pathlib import Path
 from typing import Any
 
 import altair as alt
@@ -35,12 +33,6 @@ except ImportError:  # Streamlit can still render a standard map without pydeck 
     pdk = None
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-XLSFORM_PATHS = {
-    "Tool 2": PROJECT_ROOT / "XLS_Form" / "ECE Tool2 Classroom Observation.xlsx",
-    "Tool 3": PROJECT_ROOT / "XLS_Form" / "ECE_Tool3_Parent_Interview.xlsx",
-    "Tool 5": PROJECT_ROOT / "XLS_Form" / "TLS_Tool5_Classroom_Observation.xlsx",
-}
 XLSFORM_DRIVE_FILES = {
     "Tool 2": "ECE Tool2 Classroom Observation.xlsx",
     "Tool 3": "ECE_Tool3_Parent_Interview.xlsx",
@@ -148,60 +140,6 @@ def choice_list_name(type_value: object) -> str:
 
 
 @st.cache_data(ttl=900, show_spinner=False)
-def load_xlsform_schema(path_text: str, tool_key: str) -> dict[str, Any]:
-    path = Path(path_text)
-    survey = pd.read_excel(path, sheet_name="survey").fillna("")
-    choices = pd.read_excel(path, sheet_name="choices").fillna("")
-    settings = pd.read_excel(path, sheet_name="settings").fillna("")
-
-    fields: list[dict[str, Any]] = []
-    for _, row in survey.iterrows():
-        name = clean_text(row.get("name", ""))
-        type_raw = clean_text(row.get("type", ""))
-        base_type = base_question_type(type_raw)
-        if not name or base_type in STRUCTURAL_TYPES:
-            continue
-        label = clean_text(row.get("label:English", "")) or clean_text(row.get("label:Dari", "")) or name
-        fields.append(
-            {
-                "name": name,
-                "name_key": normalize_key(name),
-                "type": base_type,
-                "type_raw": type_raw,
-                "choice_list": choice_list_name(type_raw),
-                "label": label,
-                "required": str(row.get("required", "")).strip().lower() in {"true", "yes", "1"},
-                "relevance": clean_text(row.get("relevance", "")),
-            }
-        )
-
-    choice_labels: dict[str, dict[str, str]] = {}
-    if {"list_name", "value"}.issubset(choices.columns):
-        for _, row in choices.iterrows():
-            list_name = clean_text(row.get("list_name", ""))
-            value = canonical_value(row.get("value", ""))
-            if not list_name or not value:
-                continue
-            label = clean_text(row.get("label:English", "")) or clean_text(row.get("label:Dari", "")) or value
-            choice_labels.setdefault(list_name, {})[value] = label
-
-    form_title = ""
-    form_id = ""
-    if not settings.empty:
-        form_title = clean_text(settings.iloc[0].get("form_title", ""))
-        form_id = clean_text(settings.iloc[0].get("form_id", ""))
-
-    return {
-        "tool_key": tool_key,
-        "form_title": form_title or tool_key,
-        "form_id": form_id,
-        "fields": fields,
-        "field_by_key": {field["name_key"]: field for field in fields},
-        "choice_labels": choice_labels,
-        "path": str(path),
-    }
-
-
 def load_all_schemas() -> dict[str, dict[str, Any]]:
     schemas = {}
     folder_id = get_drive_folder_id()
@@ -328,12 +266,6 @@ def load_all_schemas() -> dict[str, dict[str, Any]]:
             except Exception:
                 continue
 
-    if len(schemas) < len(XLSFORM_PATHS):
-        for tool_key, path in XLSFORM_PATHS.items():
-            if tool_key in schemas:
-                continue
-            if path.exists():
-                schemas[tool_key] = load_xlsform_schema(str(path), tool_key)
     return schemas
 
 
@@ -361,17 +293,6 @@ def build_generic_schema(dataframe: pd.DataFrame, title: str = "Generic") -> dic
         "choice_labels": {},
         "path": "auto-generated",
     }
-
-
-def read_uploaded_sheets(uploaded_file) -> dict[str, pd.DataFrame]:
-    file_name = uploaded_file.name.lower()
-    buffer = BytesIO(uploaded_file.getvalue())
-    if file_name.endswith(".csv"):
-        return {"CSV": pd.read_csv(buffer)}
-    if file_name.endswith(".xlsx") or file_name.endswith(".xls"):
-        sheets = pd.read_excel(buffer, sheet_name=None)
-        return {str(name): frame for name, frame in sheets.items()}
-    raise ValueError("Only CSV, XLS, and XLSX datasets are supported.")
 
 
 def default_sheet_name(sheets: dict[str, pd.DataFrame]) -> str:
@@ -2414,7 +2335,7 @@ def render_dataset_analysis(source_name: str, sheet_name: str, dataset: pd.DataF
 
 apply_liquid_glass_theme(
     "Data Visualization Studio",
-    "Upload a dataset and the dashboard will detect Tool 2, Tool 3, or Tool 5 from the XLSForm schema, then build complete chart coverage for every column.",
+    "The dashboard auto-loads datasets and XLSForm schemas from Google Drive and builds complete chart coverage for every column.",
     accent="#38bdf8",
     compact_hero=True,
 )
@@ -2426,65 +2347,36 @@ if not schemas:
     )
 
 render_glass_section(
-    "Dataset Upload",
-    "Upload source data exported from KoBo/ODK or Excel, or use the three local datasets from your TLS folder. Each dataset gets its own complete analysis workspace.",
-)
-
-uploaded_files = st.file_uploader(
-    "Upload one or more datasets (optional)",
-    type=["csv", "xlsx", "xls"],
-    accept_multiple_files=True,
-)
-
-use_drive_datasets = st.checkbox(
-    "Use Google Drive datasets automatically",
-    value=True,
-    help="Loads the three configured TLS datasets from Google Drive using secrets.",
+    "Dataset Source",
+    "Datasets and XLSForm schemas are loaded automatically from Google Drive.",
 )
 
 dataset_records: list[dict[str, Any]] = []
 processing_errors: list[str] = []
 
-if use_drive_datasets:
-    folder_id = get_drive_folder_id()
-    if not folder_id:
-        processing_errors.append("`GOOGLE_DRIVE_FOLDER_ID` (or folder URL) is missing in secrets.")
-    for file_name in GOOGLE_DRIVE_DATASET_FILES:
-        try:
-            if not folder_id:
-                break
-            sheets = read_drive_sheets_by_name(file_name, folder_id)
-            source_file_name = file_name
-            sheet_name = default_sheet_name(sheets)
-            raw_dataframe = sheets[sheet_name].copy().dropna(how="all")
-            dataset_records.append(
-                {
-                    "source_name": source_file_name,
-                    "display_name": file_name.rsplit(".", 1)[0],
-                    "sheet_name": sheet_name,
-                    "raw_rows": len(raw_dataframe),
-                    "dataframe": prepare_dataset(raw_dataframe),
-                }
-            )
-        except Exception as exc:
-            processing_errors.append(f"{file_name}: {exc}")
+folder_id = get_drive_folder_id()
+if not folder_id:
+    processing_errors.append("`GOOGLE_DRIVE_FOLDER_ID` (or folder URL) is missing in secrets.")
 
-for uploaded_file in uploaded_files or []:
+for file_name in GOOGLE_DRIVE_DATASET_FILES:
     try:
-        sheets = read_uploaded_sheets(uploaded_file)
+        if not folder_id:
+            break
+        sheets = read_drive_sheets_by_name(file_name, folder_id)
+        source_file_name = file_name
         sheet_name = default_sheet_name(sheets)
         raw_dataframe = sheets[sheet_name].copy().dropna(how="all")
         dataset_records.append(
             {
-                "source_name": uploaded_file.name,
-                "display_name": uploaded_file.name.rsplit(".", 1)[0],
+                "source_name": source_file_name,
+                "display_name": file_name.rsplit(".", 1)[0],
                 "sheet_name": sheet_name,
                 "raw_rows": len(raw_dataframe),
                 "dataframe": prepare_dataset(raw_dataframe),
             }
         )
     except Exception as exc:
-        processing_errors.append(f"{uploaded_file.name}: {exc}")
+        processing_errors.append(f"{file_name}: {exc}")
 
 if processing_errors:
     st.warning("Some datasets could not be processed: " + " | ".join(processing_errors))
@@ -2500,7 +2392,7 @@ if not dataset_records:
         }
         for tool_key, schema in schemas.items()
     ]
-    st.info("Upload datasets, or enable local TLS datasets, to start automatic analysis and visualization.")
+    st.error("No datasets were loaded from Google Drive. Check folder access, file names, and service-account permissions.")
     st.dataframe(pd.DataFrame(schema_rows), use_container_width=True, hide_index=True)
     st.stop()
 
