@@ -692,6 +692,55 @@ def render_bar_chart(dataframe: pd.DataFrame, category: str, title: str, color: 
     st.altair_chart(modernize_chart(chart), use_container_width=True)
 
 
+def build_tool5_approved_tpm_duplicates(dataframe: pd.DataFrame) -> pd.DataFrame:
+    tpm_column = first_existing_column(dataframe, ["TPM_TLS_ID", "TPM TLS ID", "TPM-ID (ECE, TLS)", "TPM_ID"])
+    review_column = first_existing_column(dataframe, ["review_status", "Review Status", "QA_status", "QC_status", "Status"])
+    if not tpm_column or not review_column or dataframe.empty:
+        return pd.DataFrame(columns=["TPM_TLS_ID", "Count"])
+
+    work = dataframe.copy()
+    work[tpm_column] = work[tpm_column].fillna("").astype(str).str.strip()
+    work[review_column] = work[review_column].fillna("").astype(str).str.strip().str.upper()
+    work = work[(work[tpm_column] != "") & (work[review_column] == "APPROVED")]
+    if work.empty:
+        return pd.DataFrame(columns=["TPM_TLS_ID", "Count"])
+
+    grouped = (
+        work.groupby(tpm_column, as_index=False)
+        .size()
+        .rename(columns={tpm_column: "TPM_TLS_ID", "size": "Count"})
+    )
+    grouped = grouped[grouped["Count"] > 1].sort_values("Count", ascending=False).head(30)
+    return grouped
+
+
+def render_tool5_tpm_duplicate_chart(dataframe: pd.DataFrame) -> None:
+    chart_data = build_tool5_approved_tpm_duplicates(dataframe)
+    if chart_data.empty:
+        st.info("No duplicated TPM TLS IDs were found where review_status is APPROVED.")
+        return
+
+    max_value = float(chart_data["Count"].max())
+    base = (
+        alt.Chart(chart_data)
+        .encode(
+            x=alt.X("Count:Q", title="Approved Duplicate Count", scale=alt.Scale(domain=[0, max(max_value * 1.15, 2)])),
+            y=alt.Y("TPM_TLS_ID:N", title=None, sort="-x"),
+            tooltip=["TPM_TLS_ID:N", alt.Tooltip("Count:Q", format=",")],
+        )
+    )
+    bars = base.mark_bar(cornerRadiusTopRight=10, cornerRadiusBottomRight=10, color="#22c55e", opacity=0.9)
+    glow = base.mark_bar(cornerRadiusTopRight=10, cornerRadiusBottomRight=10, color="#86efac", opacity=0.2, size=26)
+    labels = base.mark_text(align="left", baseline="middle", dx=8, color=CHART_TEXT, font=CHART_FONT, fontSize=11, fontWeight=900).encode(
+        text=alt.Text("Count:Q", format=",")
+    )
+    chart = alt.layer(glow, bars, labels).properties(
+        height=min(max(len(chart_data) * 28, 320), 720),
+        title="Tool 5 · Approved Duplicate TPM TLS IDs",
+    )
+    st.altair_chart(modernize_chart(chart), use_container_width=True)
+
+
 def render_donut_chart(dataframe: pd.DataFrame, category: str, title: str, colors: list[str] | None = None) -> None:
     if dataframe.empty or category not in dataframe.columns or "Count" not in dataframe.columns:
         st.info("No data is available for this chart.")
@@ -2260,6 +2309,9 @@ def render_dataset_analysis(source_name: str, sheet_name: str, dataset: pd.DataF
     tabs = st.tabs(["Executive View", "Insight Lab", "Smart Visuals", "All Columns", "Data Quality", "Tool Schema"])
 
     with tabs[0]:
+        if selected_tool == "Tool 5":
+            render_tool5_tpm_duplicate_chart(filtered)
+            st.markdown("<div style='height: 24px;'></div>", unsafe_allow_html=True)
         overview_left, overview_right = st.columns(2, gap="large")
         with overview_left:
             render_bar_chart(required_completeness(profile), "Column", "Required Field Completeness", "#22c55e", value_column="Completeness %")
