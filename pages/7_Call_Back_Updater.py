@@ -15,7 +15,7 @@ from services.google_sheets import (
     update_summary_timestamp,
 )
 from services.ui_theme import apply_liquid_glass_theme, render_glass_section
-from services.google_drive import get_drive_folder_id, read_drive_sheets_by_name
+from services.google_drive import find_drive_file_id_by_keywords, get_drive_folder_id, read_drive_sheets, read_drive_sheets_by_name
 
 
 QA_LOG_SHEET = "QA_Log"
@@ -40,10 +40,15 @@ CHART_MUTED = "#93a4c4"
 CHART_GRID = "rgba(219, 231, 255, 0.12)"
 CHART_HEIGHT = 360
 GOOGLE_DRIVE_DATASET_FILES = [
-    "Tool 2 ECE Classroom Observation.xlsx",
-    "Tool 3 ECE Parent Interview.xlsx",
-    "Tool 5 TLS Classroom Observation.xlsx",
+    "ECE Tool2 Classroom Observation_Form.xlsx",
+    "ECE_Tool3_Parent_Interview_Form.xlsx",
+    "TLS_Tool5_Classroom_Observation_Form.xlsx",
 ]
+DATASET_FILE_KEYWORDS = {
+    "ECE Tool2 Classroom Observation_Form.xlsx": ("tool2", "classroom", "observation"),
+    "ECE_Tool3_Parent_Interview_Form.xlsx": ("tool3", "parent", "interview"),
+    "TLS_Tool5_Classroom_Observation_Form.xlsx": ("tool5", "classroom", "observation"),
+}
 
 
 def to_text(value: object) -> str:
@@ -214,7 +219,13 @@ def build_dataset_index() -> tuple[dict[str, dict[str, str]], list[str], list[st
 
     for dataset_name in GOOGLE_DRIVE_DATASET_FILES:
         try:
-            sheets = read_drive_sheets_by_name(dataset_name, folder_id)
+            try:
+                sheets = read_drive_sheets_by_name(dataset_name, folder_id)
+            except Exception:
+                file_id = find_drive_file_id_by_keywords(folder_id, DATASET_FILE_KEYWORDS.get(dataset_name, tuple()))
+                if not file_id:
+                    raise
+                sheets = read_drive_sheets(file_id)
             if "data" in sheets:
                 dataframe = sheets["data"].fillna("")
             elif sheets:

@@ -181,6 +181,20 @@ def find_drive_file_id_by_name(file_name: str, folder_id: str) -> str:
     return ""
 
 
+@st.cache_data(ttl=1800, show_spinner=False)
+def find_drive_file_id_by_keywords(folder_id: str, keywords: tuple[str, ...]) -> str:
+    if not folder_id.strip() or not keywords:
+        return ""
+    lowered_keywords = [str(keyword).strip().lower() for keyword in keywords if str(keyword).strip()]
+    if not lowered_keywords:
+        return ""
+    for item in list_drive_folder_files(folder_id):
+        name = str(item.get("name", "")).strip().lower()
+        if name and all(keyword in name for keyword in lowered_keywords):
+            return str(item.get("id", "")).strip()
+    return ""
+
+
 def read_drive_sheets(file_id: str) -> dict[str, pd.DataFrame]:
     content = read_drive_file_bytes(file_id)
     name = read_drive_file_name(file_id).lower()
