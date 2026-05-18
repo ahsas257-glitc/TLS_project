@@ -873,6 +873,104 @@ def render_tool5_returnee_climate_chart(dataframe: pd.DataFrame) -> None:
     st.altair_chart(modernize_chart(chart), use_container_width=True)
 
 
+def build_tool5_host_students_zone_province(dataframe: pd.DataFrame) -> pd.DataFrame:
+    host_column = first_existing_column(
+        dataframe,
+        [
+            "num_host_students",
+            "Num_host_students",
+            "number_of_host_students",
+            "# of host students",
+            "No of host students",
+            "host_students",
+        ],
+    )
+    if not host_column:
+        host_column = first_column_by_keywords(dataframe, ["host", "student"])
+    zone_column = first_existing_column(dataframe, ["Zone", "zone", "Region", "region"])
+    if not zone_column:
+        zone_column = first_column_by_keywords(dataframe, ["zone"])
+    province_column = first_existing_column(dataframe, ["Province", "province"])
+    if not province_column:
+        province_column = first_column_by_keywords(dataframe, ["province"])
+    if not host_column or not zone_column or not province_column or dataframe.empty:
+        return pd.DataFrame(columns=["ZoneProvince", "Host Students"])
+
+    work = dataframe[[host_column, zone_column, province_column]].copy()
+    work["Host Students"] = parse_returnee_series(work[host_column])
+    work["Zone"] = work[zone_column].fillna("Unknown").astype(str).str.strip().replace("", "Unknown")
+    work["Province"] = work[province_column].fillna("Unknown").astype(str).str.strip().replace("", "Unknown")
+    work["ZoneProvince"] = work["Zone"] + " · " + work["Province"]
+    grouped = (
+        work.groupby("ZoneProvince", as_index=False)["Host Students"]
+        .sum()
+        .sort_values("Host Students", ascending=False)
+    )
+    return grouped[grouped["Host Students"] > 0].head(18)
+
+
+def build_tool5_host_students_climate(dataframe: pd.DataFrame) -> pd.DataFrame:
+    host_column = first_existing_column(
+        dataframe,
+        [
+            "num_host_students",
+            "Num_host_students",
+            "number_of_host_students",
+            "# of host students",
+            "No of host students",
+            "host_students",
+        ],
+    )
+    if not host_column:
+        host_column = first_column_by_keywords(dataframe, ["host", "student"])
+    climate_column = first_existing_column(dataframe, ["Climate", "climate"])
+    if not climate_column:
+        climate_column = first_column_by_keywords(dataframe, ["climate"])
+    if not host_column or not climate_column or dataframe.empty:
+        return pd.DataFrame(columns=["Climate", "Host Students"])
+
+    work = dataframe[[host_column, climate_column]].copy()
+    work["Host Students"] = parse_returnee_series(work[host_column])
+    work["Climate"] = work[climate_column].fillna("Unknown").astype(str).str.strip().replace("", "Unknown")
+    grouped = work.groupby("Climate", as_index=False)["Host Students"].sum().sort_values("Host Students", ascending=False)
+    return grouped[grouped["Host Students"] > 0]
+
+
+def render_tool5_host_students_circular_charts(dataframe: pd.DataFrame) -> None:
+    zone_province_data = build_tool5_host_students_zone_province(dataframe)
+    climate_data = build_tool5_host_students_climate(dataframe)
+    if zone_province_data.empty and climate_data.empty:
+        return
+
+    left_col, right_col = st.columns(2, gap="large")
+    with left_col:
+        if not zone_province_data.empty:
+            zone_chart = (
+                alt.Chart(zone_province_data)
+                .mark_arc(innerRadius=72, outerRadius=126, cornerRadius=6, padAngle=0.02)
+                .encode(
+                    theta=alt.Theta("Host Students:Q"),
+                    color=alt.Color("ZoneProvince:N", scale=alt.Scale(range=PALETTE), legend=alt.Legend(title="Zone · Province")),
+                    tooltip=["ZoneProvince:N", alt.Tooltip("Host Students:Q", format=",")],
+                )
+                .properties(height=430, title="Tool 5 · Host Students by Zone and Province")
+            )
+            st.altair_chart(modernize_chart(zone_chart), use_container_width=True)
+    with right_col:
+        if not climate_data.empty:
+            climate_chart = (
+                alt.Chart(climate_data)
+                .mark_arc(innerRadius=72, outerRadius=126, cornerRadius=6, padAngle=0.02)
+                .encode(
+                    theta=alt.Theta("Host Students:Q"),
+                    color=alt.Color("Climate:N", scale=alt.Scale(range=PALETTE), legend=alt.Legend(title="Climate")),
+                    tooltip=["Climate:N", alt.Tooltip("Host Students:Q", format=",")],
+                )
+                .properties(height=430, title="Tool 5 · Host Students by Climate")
+            )
+            st.altair_chart(modernize_chart(climate_chart), use_container_width=True)
+
+
 def build_tool5_experience_duration_by_gender(dataframe: pd.DataFrame) -> pd.DataFrame:
     duration_column = first_existing_column(
         dataframe,
@@ -2542,6 +2640,8 @@ def render_dataset_analysis(source_name: str, sheet_name: str, dataset: pd.DataF
                 render_tool5_returnee_zone_province_chart(filtered)
             with tool5_right:
                 render_tool5_returnee_climate_chart(filtered)
+            st.markdown("<div style='height: 24px;'></div>", unsafe_allow_html=True)
+            render_tool5_host_students_circular_charts(filtered)
             st.markdown("<div style='height: 24px;'></div>", unsafe_allow_html=True)
             render_tool5_experience_duration_gender_charts(filtered)
             st.markdown("<div style='height: 24px;'></div>", unsafe_allow_html=True)
