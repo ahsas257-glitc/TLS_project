@@ -8,11 +8,15 @@ from urllib.parse import parse_qs, urlparse
 import pandas as pd
 import requests
 import streamlit as st
+import gspread
 from google.auth.transport.requests import Request
 from google.oauth2.service_account import Credentials
 
 
-DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.readonly"
+DRIVE_SCOPES = [
+    "https://www.googleapis.com/auth/drive.readonly",
+    "https://www.googleapis.com/auth/spreadsheets.readonly",
+]
 
 
 class GoogleDriveConnectionError(RuntimeError):
@@ -35,11 +39,17 @@ def get_drive_credentials() -> Credentials:
         )
 
     try:
-        credentials = Credentials.from_service_account_info(credentials_info, scopes=[DRIVE_SCOPE])
+        credentials = Credentials.from_service_account_info(credentials_info, scopes=DRIVE_SCOPES)
         credentials.refresh(Request())
         return credentials
     except Exception as exc:
         raise GoogleDriveConnectionError(f"Unable to authorize Google Drive client: {exc}") from exc
+
+
+@st.cache_resource(show_spinner=False)
+def get_drive_gspread_client() -> gspread.Client:
+    credentials = get_drive_credentials()
+    return gspread.authorize(credentials)
 
 
 def _load_dataset_id_mapping() -> dict[str, str]:
@@ -207,9 +217,7 @@ def read_drive_sheets(file_id: str) -> dict[str, pd.DataFrame]:
         # Fallback path when Drive API listing/download is disabled:
         # read directly via Google Sheets API (requires sheet shared with service account).
         try:
-            from services.google_sheets import get_gspread_client
-
-            client = get_gspread_client()
+            client = get_drive_gspread_client()
             spreadsheet = client.open_by_key(file_id)
             frames: dict[str, pd.DataFrame] = {}
             for worksheet in spreadsheet.worksheets():
@@ -221,8 +229,24 @@ def read_drive_sheets(file_id: str) -> dict[str, pd.DataFrame]:
                 rows = values[1:] if len(values) > 1 else []
                 frames[worksheet.title] = pd.DataFrame(rows, columns=headers)
             return frames
-        except Exception as exc:
-            raise GoogleDriveConnectionError(f"Unable to load spreadsheet by key `{file_id}`: {exc}") from exc
+        except Exception:
+            try:
+                from services.google_sheets import get_gspread_client
+
+                client = get_gspread_client()
+                spreadsheet = client.open_by_key(file_id)
+                frames: dict[str, pd.DataFrame] = {}
+                for worksheet in spreadsheet.worksheets():
+                    values = worksheet.get_all_values()
+                    if not values:
+                        frames[worksheet.title] = pd.DataFrame()
+                        continue
+                    headers = [str(cell).strip() for cell in values[0]]
+                    rows = values[1:] if len(values) > 1 else []
+                    frames[worksheet.title] = pd.DataFrame(rows, columns=headers)
+                return frames
+            except Exception as exc:
+                raise GoogleDriveConnectionError(f"Unable to load spreadsheet by key `{file_id}`: {exc}") from exc
 
 
 def read_drive_sheets_by_name(file_name: str, folder_id: str) -> dict[str, pd.DataFrame]:
