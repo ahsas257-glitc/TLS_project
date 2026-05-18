@@ -3,3 +3,5 @@ gspread>=6.1.2
 google-auth>=2.29.0
 pandas>=2.2.2
 openpyxl>=3.1.2
+pydeck>=0.9.1
+folium>=0.16.0

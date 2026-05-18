@@ -13,6 +13,8 @@ CORRECTION_LOG_SHEET = "Correction_Log"
 REJECTION_LOG_SHEET = "Rejection_Log"
 RED_FLAG_SHEET = "Red-Flag"
 CALL_BACK_SHEET = "Call-Back"
+DEFAULT_TLS_COLLECTION_TARGET = 400
+DEFAULT_ECE_COLLECTION_TARGET = 162
 
 
 @st.cache_data(ttl=120)
@@ -148,6 +150,26 @@ def normalize_status(value: object) -> str:
     if "call" in lowered:
         return "Call Back"
     return text.title()
+
+
+def status_mask(dataframe: pd.DataFrame, expected_status: str) -> pd.Series:
+    if dataframe.empty:
+        return pd.Series(dtype=bool, index=dataframe.index)
+    if "Status" not in dataframe.columns:
+        return pd.Series(False, index=dataframe.index)
+    return dataframe["Status"].apply(normalize_status).eq(expected_status)
+
+
+def exclude_status(dataframe: pd.DataFrame, status: str) -> pd.DataFrame:
+    if dataframe.empty or "Status" not in dataframe.columns:
+        return dataframe.copy()
+    return dataframe[~status_mask(dataframe, status)].copy()
+
+
+def only_status(dataframe: pd.DataFrame, status: str) -> pd.DataFrame:
+    if dataframe.empty or "Status" not in dataframe.columns:
+        return dataframe.iloc[0:0].copy()
+    return dataframe[status_mask(dataframe, status)].copy()
 
 
 def build_status_counts(dataframe: pd.DataFrame, status_column: str = "Status") -> pd.DataFrame:
@@ -389,6 +411,37 @@ def build_sample_qa_match_table(tls_health: dict[str, object], ece_health: dict[
         },
     ]
     return pd.DataFrame(rows)
+
+
+def build_command_completion_table(
+    tls_health: dict[str, object],
+    ece_health: dict[str, object],
+    tls_rejected_health: dict[str, object],
+    ece_rejected_health: dict[str, object],
+    tls_target: int,
+    ece_target: int,
+) -> pd.DataFrame:
+    rows = [
+        {
+            "Stream": "TLS / Tool 5",
+            "Target": tls_target,
+            "Clean Completed": int(tls_health["qa_matched"]),
+            "Rejected": int(tls_rejected_health["qa_matched"]),
+        },
+        {
+            "Stream": "ECE / Tool 2-3",
+            "Target": ece_target,
+            "Clean Completed": int(ece_health["qa_matched"]),
+            "Rejected": int(ece_rejected_health["qa_matched"]),
+        },
+    ]
+    table = pd.DataFrame(rows)
+    table["Remaining"] = (table["Target"] - table["Clean Completed"]).clip(lower=0)
+    table["Clean Completion %"] = table.apply(
+        lambda row: round((row["Clean Completed"] / row["Target"]) * 100, 1) if row["Target"] else 0,
+        axis=1,
+    )
+    return table
 
 
 def build_sample_geo_matrix(tls_df: pd.DataFrame, ece_df: pd.DataFrame) -> pd.DataFrame:
@@ -657,6 +710,17 @@ def build_tool_mix(qa_log: pd.DataFrame) -> pd.DataFrame:
     return counts
 
 
+def build_rejection_reason_breakdown(rejected_qa_log: pd.DataFrame, limit: int = 12) -> pd.DataFrame:
+    reason_column = first_existing_column(rejected_qa_log, ["Rejection Reason", "Reject Reason", "Reason", "Remark"])
+    if rejected_qa_log.empty or not reason_column:
+        return pd.DataFrame(columns=["Rejection Reason", "Count"])
+    reasons = rejected_qa_log[reason_column].astype(str).str.strip()
+    reasons = reasons.replace("", "Unspecified")
+    counts = reasons.value_counts().head(limit).reset_index()
+    counts.columns = ["Rejection Reason", "Count"]
+    return counts
+
+
 def build_tool_summary(summary_data: dict[str, object], qa_log: pd.DataFrame) -> pd.DataFrame:
     overall_progress = summary_data["overall_progress"].copy()
     qa_progress = summary_data["qa_progress"].copy()
@@ -745,7 +809,10 @@ def build_surveyor_table(summary_enumerator: pd.DataFrame, qa_log: pd.DataFrame)
         qa_work = qa_log.copy()
         qa_work["Surveyor_Name"] = qa_work["Surveyor_Name"].astype(str).str.strip()
         qa_counts = qa_work.groupby("Surveyor_Name").size().reset_index(name="QA_Log_Records")
-        qa_work["Status"] = qa_work.get("Status", "").astype(str).str.strip().replace("", "Pending")
+        if "Status" in qa_work.columns:
+            qa_work["Status"] = qa_work["Status"].apply(normalize_status)
+        else:
+            qa_work["Status"] = "Pending"
         status_summary = (
             qa_work.pivot_table(index="Surveyor_Name", columns="Status", values="KEY", aggfunc="count", fill_value=0)
             .reset_index()
@@ -778,11 +845,14 @@ def render_metric_card(title: str, value: str, subtitle: str, tone: str) -> None
             border: 1px solid rgba(226, 232, 240, 0.18);
             border-radius: 16px;
             padding: 18px 19px 17px 19px;
+            box-sizing: border-box;
             box-shadow:
                 0 22px 58px rgba(0, 0, 0, 0.30),
                 inset 0 1px 0 rgba(255,255,255,0.20),
                 inset 0 -1px 0 rgba(255,255,255,0.06);
-            min-height: 166px;
+            width: 100%;
+            height: 188px;
+            min-height: 188px;
             display:flex;
             flex-direction:column;
             justify-content:space-between;
@@ -829,6 +899,8 @@ def render_metric_card(title: str, value: str, subtitle: str, tone: str) -> None
                     font-weight: 900;
                     line-height:1.25;
                     max-width: calc(100% - 52px);
+                    min-height: 24px;
+                    overflow-wrap:anywhere;
                 ">
                     <span style="width:7px; height:7px; border-radius:999px; background:{tone}; box-shadow:0 0 18px {tone}; flex:0 0 auto;"></span>
                     <span>{title}</span>
@@ -837,7 +909,7 @@ def render_metric_card(title: str, value: str, subtitle: str, tone: str) -> None
                     font-size: clamp(1.8rem, 2.1vw, 2.35rem);
                     font-weight: 900;
                     color: #f8fbff;
-                    margin-top: 18px;
+                    margin-top: 14px;
                     line-height:1;
                     letter-spacing: 0;
                     text-shadow: 0 14px 32px rgba(0,0,0,0.36);
@@ -849,8 +921,8 @@ def render_metric_card(title: str, value: str, subtitle: str, tone: str) -> None
             <div style="
                 position:relative;
                 z-index:1;
-                margin-top: 16px;
-                padding-top: 12px;
+                margin-top: 12px;
+                padding-top: 10px;
                 border-top: 1px solid rgba(226,232,240,0.12);
             ">
                 <div style="
@@ -858,10 +930,18 @@ def render_metric_card(title: str, value: str, subtitle: str, tone: str) -> None
                     width:74px;
                     border-radius:999px;
                     background: linear-gradient(90deg, {tone} 0%, rgba(255,255,255,0.62) 100%);
-                    margin-bottom: 10px;
+                    margin-bottom: 8px;
                     box-shadow: 0 0 24px color-mix(in srgb, {tone} 42%, transparent);
                 "></div>
-                <div style="font-size: 0.82rem; color: #a9b8d6; line-height: 1.5; font-weight: 600;">
+                <div style="
+                    font-size: 0.78rem;
+                    color: #a9b8d6;
+                    line-height: 1.35;
+                    font-weight: 600;
+                    max-height: 3.95em;
+                    overflow:hidden;
+                    overflow-wrap:anywhere;
+                ">
                     {subtitle}
                 </div>
             </div>
@@ -926,6 +1006,7 @@ STATUS_COLORS = {
     "Assigned": "#2563eb",
     "QA Log Records": "#8b5cf6",
     "Summary Completed": "#38bdf8",
+    "Clean Completed": "#22c55e",
     "Received": "#38bdf8",
     "QA'd": "#0f766e",
     "Matched QA IDs": "#22c55e",
@@ -943,6 +1024,7 @@ def padded_numeric_domain(values: pd.Series, padding: float = 0.14, minimum: flo
 def modernize_chart(chart: alt.TopLevelMixin) -> alt.TopLevelMixin:
     return (
         chart
+        .properties(padding={"top": 18, "right": 16, "bottom": 12, "left": 16})
         .configure(background="transparent")
         .configure_view(strokeOpacity=0)
         .configure_title(
@@ -951,7 +1033,8 @@ def modernize_chart(chart: alt.TopLevelMixin) -> alt.TopLevelMixin:
             fontWeight=800,
             color=CHART_TEXT,
             anchor="start",
-            offset=16,
+            offset=22,
+            limit=520,
         )
         .configure_axis(
             labelFont=CHART_FONT,
@@ -1083,7 +1166,11 @@ def render_donut_chart(dataframe: pd.DataFrame, category: str, title: str, color
         .mark_text(font=CHART_FONT, fontSize=11, fontWeight=700, color=CHART_MUTED, dy=20)
         .encode(text="Label:N")
     )
-    chart = alt.layer(arc, center, center_label).properties(height=CHART_HEIGHT_STANDARD, title=title)
+    chart = alt.layer(arc, center, center_label).properties(
+        height=CHART_HEIGHT_STANDARD + 18,
+        title=alt.TitleParams(text=title, anchor="start", offset=24),
+        padding={"top": 22, "right": 18, "bottom": 16, "left": 18},
+    )
     st.altair_chart(modernize_chart(chart), use_container_width=True)
 
 
@@ -1337,7 +1424,6 @@ def build_sample_health_table(health: dict[str, object], tool_label: str) -> pd.
             {"Signal": f"All {tool_label} QA records", "Value": int(health["qa_total_records"])},
             {"Signal": f"Unmatched {tool_label} QA records", "Value": int(health["qa_unmatched"])},
             {"Signal": "Approved", "Value": int(health["approved"])},
-            {"Signal": "Rejected", "Value": int(health["rejected"])},
             {"Signal": "Pending", "Value": int(health["pending"])},
             {"Signal": f"{tool_label} positive flags", "Value": int(health["tool_positive"])},
             {"Signal": "Total Data positive flags", "Value": int(health["total_data_positive"])},
@@ -1352,7 +1438,6 @@ def render_sample_health_signal_chart(health: dict[str, object], title: str, col
         [
             {"Stage": "Sample matched", "Metric": "Matched QA IDs", "Count": int(health["qa_matched"])},
             {"Stage": "QA records", "Metric": "Approved", "Count": int(health["approved"])},
-            {"Stage": "QA records", "Metric": "Rejected", "Count": int(health["rejected"])},
             {"Stage": "QA records", "Metric": "Pending", "Count": int(health["pending"])},
             {"Stage": "Integrity", "Metric": "Missing IDs", "Count": int(health["missing_sample_ids"])},
             {"Stage": "Integrity", "Metric": "Duplicate IDs", "Count": int(health["duplicate_ids"])},
@@ -1363,11 +1448,10 @@ def render_sample_health_signal_chart(health: dict[str, object], title: str, col
         st.info("No health signals are available for this view.")
         return
 
-    metric_order = ["Matched QA IDs", "Approved", "Rejected", "Pending", "Missing IDs", "Duplicate IDs"]
+    metric_order = ["Matched QA IDs", "Approved", "Pending", "Missing IDs", "Duplicate IDs"]
     color_range = [
         color,
         STATUS_COLORS["Approved"],
-        STATUS_COLORS["Rejected"],
         STATUS_COLORS["Pending"],
         "#f97316",
         "#8b5cf6",
@@ -1479,7 +1563,9 @@ elif selected_regions:
 else:
     log_scope_provinces = []
 
-filtered_qa_log_data = apply_log_filters(qa_log_data, log_scope_provinces, log_scope_districts)
+filtered_qa_log_all_data = apply_log_filters(qa_log_data, log_scope_provinces, log_scope_districts)
+filtered_rejected_qa_log_data = only_status(filtered_qa_log_all_data, "Rejected")
+filtered_qa_log_data = exclude_status(filtered_qa_log_all_data, "Rejected")
 filtered_correction_log_data = apply_log_filters(correction_log_data, log_scope_provinces, log_scope_districts)
 filtered_rejection_log_data = apply_log_filters(rejection_log_data, log_scope_provinces, log_scope_districts)
 filtered_red_flag_log_data = apply_log_filters(red_flag_log_data, log_scope_provinces, log_scope_districts)
@@ -1487,13 +1573,31 @@ filtered_callback_log_data = apply_log_filters(callback_log_data, log_scope_prov
 
 qa_status_breakdown = build_log_status_breakdown(filtered_qa_log_data)
 qa_tool_mix = build_tool_mix(filtered_qa_log_data)
+rejected_tool_mix = build_tool_mix(filtered_rejected_qa_log_data)
+rejection_reason_breakdown = build_rejection_reason_breakdown(filtered_rejected_qa_log_data)
 surveyor_command_table = build_surveyor_table(summary_data["enumerator_performance"], filtered_qa_log_data)
 tool_summary = build_tool_summary(summary_data, filtered_qa_log_data)
 
 total_tls = len(filtered_tls)
 total_ece = len(filtered_ece)
 combined_total = total_tls + total_ece
+sample_progress_data = summary_data["sample_progress"]
+tls_collection_target = (
+    safe_int(sample_progress_data.loc[sample_progress_data["Metric"] == "TLS Sample Target", "Value"].max())
+    if not sample_progress_data.empty
+    else 0
+)
+ece_collection_target = (
+    safe_int(sample_progress_data.loc[sample_progress_data["Metric"] == "ECE Sample Target", "Value"].max())
+    if not sample_progress_data.empty
+    else 0
+)
+tls_collection_target = tls_collection_target or DEFAULT_TLS_COLLECTION_TARGET
+ece_collection_target = ece_collection_target or DEFAULT_ECE_COLLECTION_TARGET
+collection_target_total = tls_collection_target + ece_collection_target
 qa_log_total = len(filtered_qa_log_data)
+qa_log_all_total = len(filtered_qa_log_all_data)
+qa_rejected_total = len(filtered_rejected_qa_log_data)
 rejection_total = len(filtered_rejection_log_data)
 correction_total = len(filtered_correction_log_data)
 red_flag_total = len(filtered_red_flag_log_data)
@@ -1512,24 +1616,42 @@ unique_districts = len(
 )
 tls_health = build_sample_health(filtered_tls, filtered_qa_log_data, "TLS", ["Tool 5", "TLS Tool 5"])
 ece_health = build_sample_health(filtered_ece, filtered_qa_log_data, "ECE", ["Tool 2", "Tool 3", "ECE Tool 2", "ECE Parent Tool 3"])
+tls_rejected_health = build_sample_health(filtered_tls, filtered_rejected_qa_log_data, "TLS", ["Tool 5", "TLS Tool 5"])
+ece_rejected_health = build_sample_health(filtered_ece, filtered_rejected_qa_log_data, "ECE", ["Tool 2", "Tool 3", "ECE Tool 2", "ECE Parent Tool 3"])
 combined_qa_matched = int(tls_health["qa_matched"]) + int(ece_health["qa_matched"])
-combined_qa_coverage = round((combined_qa_matched / combined_total) * 100, 1) if combined_total else 0
+combined_qa_coverage = round((combined_qa_matched / collection_target_total) * 100, 1) if collection_target_total else 0
+combined_rejected_matched = int(tls_rejected_health["qa_matched"]) + int(ece_rejected_health["qa_matched"])
+remaining_collection_target = max(collection_target_total - combined_qa_matched, 0)
 sheet_reconciliation = build_sheet_reconciliation(summary_data, filtered_tls, filtered_ece, filtered_qa_log_data, filtered_red_flag_log_data, filtered_callback_log_data)
+risk_sheet_reconciliation = build_sheet_reconciliation(summary_data, filtered_tls, filtered_ece, filtered_qa_log_all_data, filtered_red_flag_log_data, filtered_callback_log_data)
 sample_match_table = build_sample_qa_match_table(tls_health, ece_health, filtered_tls, filtered_ece)
+command_completion_table = build_command_completion_table(
+    tls_health,
+    ece_health,
+    tls_rejected_health,
+    ece_rejected_health,
+    tls_collection_target,
+    ece_collection_target,
+)
 sample_geo_matrix = build_sample_geo_matrix(filtered_tls, filtered_ece)
 qa_audit_matrix = build_qa_audit_matrix(filtered_qa_log_data)
 qa_timeline = build_qa_timeline(filtered_qa_log_data)
-risk_register = build_risk_register(filtered_red_flag_log_data, filtered_callback_log_data, filtered_qa_log_data)
+risk_register = build_risk_register(filtered_red_flag_log_data, filtered_callback_log_data, filtered_qa_log_all_data)
 
 metric_cols = st.columns(4, gap="large")
 with metric_cols[0]:
-    render_metric_card("Sample Universe", f"{combined_total:,}", "Combined operational sample volume across TLS and ECE.", "#2563eb")
+    render_metric_card("QA Coverage", f"{combined_qa_coverage:.1f}%", f"{combined_qa_matched:,} clean matched QA against target.", "#16a34a")
 with metric_cols[1]:
-    render_metric_card("QA Coverage", f"{combined_qa_coverage:.1f}%", f"{combined_qa_matched:,} current sample IDs matched; {int(tls_health['qa_unmatched']) + int(ece_health['qa_unmatched']):,} QA records do not match the current sample.", "#16a34a")
+    render_metric_card(
+        "Collection Target",
+        f"{collection_target_total:,}",
+        f"TLS {tls_collection_target:,} + ECE {ece_collection_target:,}; raw universe {combined_total:,}.",
+        "#2563eb",
+    )
 with metric_cols[2]:
-    render_metric_card("Operational Risk Flags", f"{red_flag_total + rejection_total + callback_total:,}", f"Red flags: {red_flag_total}, rejections: {rejection_total}, callbacks: {callback_total}.", "#f97316")
+    render_metric_card("Operational Risk Flags", f"{red_flag_total + rejection_total + callback_total:,}", f"Red flags {red_flag_total}; rejections {rejection_total}; callbacks {callback_total}.", "#f97316")
 with metric_cols[3]:
-    render_metric_card("Summary Update", f"{summary_data['updated_date'] or 'N/A'}", f"Last QA log time: {summary_data['updated_time'] or 'N/A'}", "#7c3aed")
+    render_metric_card("Summary Update", f"{summary_data['updated_date'] or 'N/A'}", f"Last QA log time {summary_data['updated_time'] or 'N/A'}.", "#7c3aed")
 
 overview_tab, command_tab, summary_tab, risk_tab, tls_tab, ece_tab = st.tabs(["Overview", "Command Center", "Summary", "QA & Risk", "TLS Sample", "ECE Sample"])
 
@@ -1541,7 +1663,7 @@ with overview_tab:
         render_progress_bullet_chart(progress_snapshot, "Sample Progress: Target vs Completed")
     with summary_top_right:
         if not qa_status_breakdown.empty:
-            render_donut_chart(qa_status_breakdown, "Status", "QA Log Status Mix", ["#22c55e", "#ef4444", "#f59e0b", "#64748b", "#2563eb"])
+            render_donut_chart(qa_status_breakdown, "Status", "Clean QA Status Mix", ["#22c55e", "#f59e0b", "#64748b", "#2563eb"])
         else:
             st.info("No QA status data is available yet.")
 
@@ -1569,10 +1691,10 @@ with overview_tab:
         sample_mix = pd.DataFrame(
             {
                 "Sample Type": ["TLS", "ECE"],
-                "Count": [total_tls, total_ece],
+                "Count": [tls_collection_target, ece_collection_target],
             }
         )
-        render_donut_chart(sample_mix, "Sample Type", "TLS vs ECE Distribution", ["#16a34a", "#f97316"])
+        render_donut_chart(sample_mix, "Sample Type", "TLS vs ECE Collection Target", ["#16a34a", "#f97316"])
 
     st.markdown("<div style='height: 40px;'></div>", unsafe_allow_html=True)
     operational_left, operational_right = st.columns(2, gap="large")
@@ -1610,8 +1732,8 @@ with overview_tab:
             render_stacked_status_chart(
                 qa_progress,
                 "Tool Name",
-                ["Approved", "Rejected", "Pending", "Remaining"],
-                "QA Status Composition by Tool",
+                ["Approved", "Pending", "Remaining"],
+                "Clean QA Status Composition by Tool",
                 height=340,
             )
         else:
@@ -1653,60 +1775,56 @@ with overview_tab:
         render_reconciliation_chart(sheet_reconciliation)
 
 with command_tab:
-    render_section_header("Command Center", "High-priority field and QA monitoring signals across Summary and operational log sheets.")
+    render_section_header("Command Center", "Clean completion excludes rejected QA records; rejected data is tracked as a separate operational signal.")
 
     st.markdown("<div style='height: 14px;'></div>", unsafe_allow_html=True)
     command_metrics = st.columns(5, gap="large")
-    tls_target = safe_int(summary_data["sample_progress"].loc[summary_data["sample_progress"]["Metric"] == "TLS Sample Target", "Value"].max()) if not summary_data["sample_progress"].empty else 0
-    ece_target = safe_int(summary_data["sample_progress"].loc[summary_data["sample_progress"]["Metric"] == "ECE Sample Target", "Value"].max()) if not summary_data["sample_progress"].empty else 0
-    completed_total = int(summary_data["overall_progress"]["Count"].sum()) if not summary_data["overall_progress"].empty else 0
     with command_metrics[0]:
-        render_metric_card("TLS Target", f"{tls_target:,}", "Target sample size for TLS from Summary.", "#2563eb")
+        render_metric_card("Collection Target", f"{collection_target_total:,}", f"TLS: {tls_collection_target:,}; ECE: {ece_collection_target:,}.", "#2563eb")
     with command_metrics[1]:
-        render_metric_card("ECE Target", f"{ece_target:,}", "Target sample size for ECE from Summary.", "#16a34a")
+        render_metric_card("Clean Completed", f"{combined_qa_matched:,}", "Matched QA records after excluding Status = Rejected.", "#16a34a")
     with command_metrics[2]:
-        render_metric_card("Completed Units", f"{completed_total:,}", "Combined completion count visible in Summary.", "#f97316")
+        render_metric_card("Rejected QA", f"{combined_rejected_matched:,}", "Matched rejected QA records tracked outside clean completion.", "#ef4444")
     with command_metrics[3]:
-        render_metric_card("Covered Provinces", f"{unique_provinces:,}", "Distinct provinces across the filtered TLS and ECE sample universe.", "#0f766e")
+        render_metric_card("Remaining Target", f"{remaining_collection_target:,}", "Target still not covered by clean matched QA.", "#f97316")
     with command_metrics[4]:
-        render_metric_card("Active Surveyors", f"{len(surveyor_command_table):,}", "Surveyors tracked in the Summary performance roster.", "#7c3aed")
+        render_metric_card("Active Surveyors", f"{len(surveyor_command_table):,}", "Surveyors tracked from clean QA activity and Summary roster.", "#7c3aed")
 
     st.markdown("<div style='height: 40px;'></div>", unsafe_allow_html=True)
     command_left, command_right = st.columns(2, gap="large")
     with command_left:
         if not surveyor_command_table.empty:
-            top_surveyors = surveyor_command_table.sort_values(["Received", "Approved_Log", "QA_Log_Records"], ascending=False).head(15)
-            render_bar_chart(top_surveyors, "Surveyor_Name", "Top Surveyors by Received Volume", "#38bdf8", value_column="Received")
+            top_surveyors = surveyor_command_table.sort_values(["QA_Log_Records", "Approved_Log", "Received"], ascending=False).head(15)
+            render_bar_chart(top_surveyors, "Surveyor_Name", "Top Surveyors by Clean QA Records", "#38bdf8", value_column="QA_Log_Records")
         else:
             st.info("No surveyor command data is available.")
     with command_right:
-        if not qa_tool_mix.empty:
-            render_donut_chart(qa_tool_mix, "Tool Name", "QA Log Tool Mix", ["#2563eb", "#22c55e", "#f97316", "#7c3aed", "#0f766e"])
+        if not rejected_tool_mix.empty:
+            render_donut_chart(rejected_tool_mix, "Tool Name", "Rejected QA Tool Mix", ["#ef4444", "#f97316", "#8b5cf6", "#64748b", "#2563eb"])
         else:
-            st.info("No QA tool mix is available yet.")
+            st.info("No rejected QA tool mix is available yet.")
 
     st.markdown("<div style='height: 40px;'></div>", unsafe_allow_html=True)
     match_left, match_right = st.columns(2, gap="large")
     with match_left:
         render_stacked_status_chart(
-            sample_match_table,
+            command_completion_table,
             "Stream",
-            ["Matched QA IDs", "Unmatched QA Rows"],
-            "Sample to QA Log Match Integrity",
+            ["Clean Completed", "Rejected", "Remaining"],
+            "Clean Completion vs Rejected by Stream",
             height=360,
         )
     with match_right:
-        st.markdown("### Match Integrity Table")
-        render_standard_table(sample_match_table)
+        st.markdown("### Command Completion Table")
+        render_standard_table(command_completion_table)
 
     st.markdown("<div style='height: 40px;'></div>", unsafe_allow_html=True)
     command_signal_left, command_signal_right = st.columns(2, gap="large")
     with command_signal_left:
-        st.markdown("### Completion Signals")
-        if not summary_data["overall_progress"].empty:
-            render_standard_table(summary_data["overall_progress"], height=360)
+        if not qa_tool_mix.empty:
+            render_donut_chart(qa_tool_mix, "Tool Name", "Clean QA Tool Mix", ["#2563eb", "#22c55e", "#f97316", "#7c3aed", "#0f766e"])
         else:
-            st.info("No completion signals are available.")
+            st.info("No clean QA tool mix is available yet.")
     with command_signal_right:
         render_reconciliation_chart(sheet_reconciliation)
 
@@ -1807,7 +1925,7 @@ with summary_tab:
     with detail_right:
         if not filtered_qa_log_data.empty:
             recent_columns = [column for column in ["Tool Name", "Province", "District", "Surveyor_Name", "Survey_Date", "Status"] if column in filtered_qa_log_data.columns]
-            st.markdown("### Latest Filtered QA Log Entries")
+            st.markdown("### Latest Clean QA Log Entries")
             render_standard_table(filtered_qa_log_data[recent_columns].tail(10), height=360)
         else:
             st.info("No QA log records are available for the selected filter.")
@@ -1840,8 +1958,8 @@ with summary_tab:
             render_stacked_status_chart(
                 tool_summary,
                 "Tool Name",
-                ["Summary Completed", "QA Log Records", "Approved", "Rejected", "Pending", "Remaining"],
-                "Tool-Level Operational Overview",
+                ["Summary Completed", "QA Log Records", "Approved", "Pending", "Remaining"],
+                "Tool-Level Clean QA Overview",
                 height=360,
             )
         else:
@@ -1860,8 +1978,8 @@ with summary_tab:
             render_stacked_status_chart(
                 surveyor_command_table.head(25),
                 "Surveyor_Name",
-                ["Received", "QA'd", "Approved", "Rejected", "Pending", "QA_Log_Records"],
-                "Surveyor Performance and QA Activity",
+                ["Received", "QA'd", "Approved", "Pending", "QA_Log_Records"],
+                "Surveyor Performance and Clean QA Activity",
                 height=520,
             )
         else:
@@ -1874,16 +1992,16 @@ with summary_tab:
             st.info("No surveyor table is available.")
 
 with risk_tab:
-    render_section_header("QA and Risk Intelligence", "Advanced monitoring from QA_Log, Red-Flag, and Call-Back with the same active geographic filters.")
+    render_section_header("QA and Risk Intelligence", "Rejected QA is monitored separately while clean QA logic excludes rejected rows from coverage and progress signals.")
 
     st.markdown("<div style='height: 14px;'></div>", unsafe_allow_html=True)
     risk_metrics = st.columns(5, gap="large")
     with risk_metrics[0]:
-        render_metric_card("Filtered QA Records", f"{len(filtered_qa_log_data):,}", "QA_Log rows inside the selected geographic scope.", "#2563eb")
+        render_metric_card("QA Scope Records", f"{qa_log_all_total:,}", "All QA_Log rows inside the selected geographic scope.", "#2563eb")
     with risk_metrics[1]:
-        render_metric_card("Approved", f"{count_matching(filtered_qa_log_data, 'Status', 'Approved'):,}", "Approved records in the filtered QA scope.", "#22c55e")
+        render_metric_card("Clean QA Records", f"{qa_log_total:,}", "QA_Log rows after excluding Status = Rejected.", "#22c55e")
     with risk_metrics[2]:
-        render_metric_card("Rejected", f"{count_matching(filtered_qa_log_data, 'Status', 'Rejected'):,}", "Rejected records in the filtered QA scope.", "#ef4444")
+        render_metric_card("Rejected QA", f"{qa_rejected_total:,}", "Rejected records are tracked here, not counted in clean QA logic.", "#ef4444")
     with risk_metrics[3]:
         render_metric_card("Red Flags", f"{len(filtered_red_flag_log_data):,}", "Records available in the Red-Flag sheet for this scope.", "#f97316")
     with risk_metrics[4]:
@@ -1892,10 +2010,10 @@ with risk_tab:
     st.markdown("<div style='height: 40px;'></div>", unsafe_allow_html=True)
     risk_top_left, risk_top_right = st.columns(2, gap="large")
     with risk_top_left:
-        render_temporal_status_chart(qa_timeline, "QA Timeline by QC Date and Status")
+        render_temporal_status_chart(qa_timeline, "Clean QA Timeline by QC Date and Status")
     with risk_top_right:
         if not qa_audit_matrix.empty:
-            render_heatmap_chart(qa_audit_matrix, "Status", "Audit Field", "Filled %", "QA Evidence Completeness Matrix", "plasma")
+            render_heatmap_chart(qa_audit_matrix, "Status", "Audit Field", "Filled %", "Clean QA Evidence Completeness Matrix", "plasma")
         else:
             st.info("No QA audit matrix is available for this filter.")
 
@@ -1906,7 +2024,7 @@ with risk_tab:
             qa_status_province = filtered_qa_log_data.copy()
             qa_status_province["Status"] = qa_status_province["Status"].apply(normalize_status)
             qa_status_province = qa_status_province.groupby(["Province", "Status"]).size().reset_index(name="Count")
-            render_heatmap_chart(qa_status_province, "Status", "Province", "Count", "QA Outcome Heatmap by Province", "magma")
+            render_heatmap_chart(qa_status_province, "Status", "Province", "Count", "Clean QA Outcome Heatmap by Province", "magma")
         else:
             st.info("No province-level QA status data is available.")
     with risk_mid_right:
@@ -1917,10 +2035,23 @@ with risk_tab:
             st.info("No risk records are available in Red-Flag, Call-Back, or QA rejection/callback flags for this filter.")
 
     st.markdown("<div style='height: 40px;'></div>", unsafe_allow_html=True)
+    rejected_left, rejected_right = st.columns(2, gap="large")
+    with rejected_left:
+        if not rejected_tool_mix.empty:
+            render_donut_chart(rejected_tool_mix, "Tool Name", "Rejected QA by Tool", ["#ef4444", "#f97316", "#8b5cf6", "#64748b", "#2563eb"])
+        else:
+            st.info("No rejected QA tool mix is available for this filter.")
+    with rejected_right:
+        if not rejection_reason_breakdown.empty:
+            render_bar_chart(rejection_reason_breakdown, "Rejection Reason", "Top Rejection Reasons", "#ef4444")
+        else:
+            st.info("No rejection reason data is available for this filter.")
+
+    st.markdown("<div style='height: 40px;'></div>", unsafe_allow_html=True)
     register_left, register_right = st.columns(2, gap="large")
     with register_left:
-        st.markdown("### Sheet Reconciliation Table")
-        render_standard_table(sheet_reconciliation, height=520)
+        st.markdown("### Full QA Sheet Reconciliation Table")
+        render_standard_table(risk_sheet_reconciliation, height=520)
     with register_right:
         st.markdown("### Risk Register")
         if not risk_register.empty:
@@ -1938,7 +2069,7 @@ with tls_tab:
     with tls_metrics[1]:
         render_metric_card("Tool 5 QA Coverage", f"{float(tls_health['qa_coverage']):.1f}%", f"{int(tls_health['qa_matched']):,} current TLS IDs matched; {int(tls_health['qa_unmatched']):,} Tool 5 QA rows are unmatched.", "#2563eb")
     with tls_metrics[2]:
-        render_metric_card("Matched Approved / Rejected", f"{int(tls_health['approved']):,} / {int(tls_health['rejected']):,}", "Tool 5 outcomes after matching QA Log to current TLS IDs.", "#f59e0b")
+        render_metric_card("Matched Approved / Pending", f"{int(tls_health['approved']):,} / {int(tls_health['pending']):,}", "Tool 5 clean QA outcomes after excluding rejected rows.", "#f59e0b")
     with tls_metrics[3]:
         render_metric_card("Unique Classes", f"{count_unique(filtered_tls, 'Class_Code'):,}", "Distinct classroom codes in the current filter.", "#7c3aed")
     with tls_metrics[4]:
@@ -1958,7 +2089,7 @@ with tls_tab:
     with tls_command_right:
         tls_status_counts = tls_health["status_counts"]
         if isinstance(tls_status_counts, pd.DataFrame) and not tls_status_counts.empty:
-            render_donut_chart(tls_status_counts, "Status", "Matched Tool 5 QA Status", ["#22c55e", "#ef4444", "#f59e0b", "#64748b"])
+            render_donut_chart(tls_status_counts, "Status", "Matched Tool 5 Clean QA Status", ["#22c55e", "#f59e0b", "#64748b"])
         else:
             st.info("No matched Tool 5 QA status is available for the selected TLS scope.")
 
@@ -2003,7 +2134,7 @@ with tls_tab:
     st.markdown("<div style='height: 40px;'></div>", unsafe_allow_html=True)
     tls_health_left, tls_health_right = st.columns(2, gap="large")
     with tls_health_left:
-        render_sample_health_signal_chart(tls_health, "TLS QA and Integrity Signals", "#16a34a")
+        render_sample_health_signal_chart(tls_health, "TLS Clean QA and Integrity Signals", "#16a34a")
     with tls_health_right:
         st.markdown("### TLS Sample Health")
         render_standard_table(build_sample_health_table(tls_health, "Tool 5"), height=300)
@@ -2017,7 +2148,7 @@ with tls_tab:
     ]
     with tls_table_left:
         if recent_tls_qa_columns:
-            st.markdown("### Latest Matched Tool 5 QA")
+            st.markdown("### Latest Matched Tool 5 Clean QA")
             render_standard_table(tls_health["qa_subset"][recent_tls_qa_columns].tail(12), height=520)
         else:
             st.info("No matched Tool 5 QA rows are available for this TLS scope.")
@@ -2057,7 +2188,7 @@ with ece_tab:
     with ece_metrics[1]:
         render_metric_card("QA Coverage", f"{float(ece_health['qa_coverage']):.1f}%", f"{int(ece_health['qa_matched']):,} ECE IDs matched; {int(ece_health['qa_unmatched']):,} ECE QA rows are unmatched.", "#2563eb")
     with ece_metrics[2]:
-        render_metric_card("Approved / Rejected", f"{int(ece_health['approved']):,} / {int(ece_health['rejected']):,}", "Tool 2/3 outcomes after matching QA Log to ECE IDs.", "#16a34a")
+        render_metric_card("Approved / Pending", f"{int(ece_health['approved']):,} / {int(ece_health['pending']):,}", "Tool 2/3 clean QA outcomes after excluding rejected rows.", "#16a34a")
     with ece_metrics[3]:
         missing_pb = 0
         if "PB_Name" in filtered_ece.columns:
@@ -2080,7 +2211,7 @@ with ece_tab:
     with ece_command_right:
         ece_status_counts = ece_health["status_counts"]
         if isinstance(ece_status_counts, pd.DataFrame) and not ece_status_counts.empty:
-            render_donut_chart(ece_status_counts, "Status", "Matched ECE QA Status", ["#22c55e", "#ef4444", "#f59e0b", "#64748b"])
+            render_donut_chart(ece_status_counts, "Status", "Matched ECE Clean QA Status", ["#22c55e", "#f59e0b", "#64748b"])
         else:
             st.info("No matched ECE QA status is available for the selected ECE scope.")
 
@@ -2115,7 +2246,7 @@ with ece_tab:
     st.markdown("<div style='height: 40px;'></div>", unsafe_allow_html=True)
     ece_health_left, ece_health_right = st.columns(2, gap="large")
     with ece_health_left:
-        render_sample_health_signal_chart(ece_health, "ECE QA and Integrity Signals", "#f97316")
+        render_sample_health_signal_chart(ece_health, "ECE Clean QA and Integrity Signals", "#f97316")
     with ece_health_right:
         st.markdown("### ECE Sample Health")
         render_standard_table(build_sample_health_table(ece_health, "Tool 2/3"), height=300)
@@ -2129,7 +2260,7 @@ with ece_tab:
     ]
     with ece_table_left:
         if recent_ece_qa_columns:
-            st.markdown("### Latest Matched Tool 2/3 QA")
+            st.markdown("### Latest Matched Tool 2/3 Clean QA")
             render_standard_table(ece_health["qa_subset"][recent_ece_qa_columns].tail(12), height=520)
         else:
             st.info("No matched Tool 2/3 QA rows are available for this ECE scope.")
