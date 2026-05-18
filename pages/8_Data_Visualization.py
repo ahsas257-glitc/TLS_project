@@ -791,16 +791,26 @@ def render_bar_chart(dataframe: pd.DataFrame, category: str, title: str, color: 
         st.info("No data is available for this chart.")
         return
     max_value = float(chart_data["Value"].max())
-    chart = (
+    base = (
         alt.Chart(chart_data)
-        .mark_bar(cornerRadiusTopRight=8, cornerRadiusBottomRight=8, color=color, opacity=0.86)
         .encode(
             x=alt.X("Value:Q", title=value_column, scale=alt.Scale(domain=[0, max(max_value * 1.22, 1)])),
             y=alt.Y("Category:N", sort="-x", title=None),
             tooltip=[alt.Tooltip("Category:N", title=category), alt.Tooltip("Value:Q", title=value_column, format=",")],
         )
-        .properties(height=height, title=title)
     )
+    bars = (
+        base
+        .mark_bar(cornerRadiusTopRight=8, cornerRadiusBottomRight=8, color=color, opacity=0.86)
+    )
+    labels = (
+        base
+        .mark_text(align="left", baseline="middle", dx=7, color=CHART_TEXT, font=CHART_FONT, fontSize=11, fontWeight=900)
+        .encode(
+            text=alt.Text("Value:Q", format=",")
+        )
+    )
+    chart = alt.layer(bars, labels).properties(height=height, title=title)
     st.altair_chart(modernize_chart(chart), use_container_width=True)
 
 
@@ -938,6 +948,16 @@ def render_tool5_returnee_zone_province_chart(dataframe: pd.DataFrame) -> None:
         )
         .properties(height=460, title="Tool 5 · Returnee Students by Zone and Province")
     )
+    labels = (
+        alt.Chart(chart_data)
+        .mark_text(align="left", baseline="middle", dx=7, color=CHART_TEXT, font=CHART_FONT, fontSize=11, fontWeight=900)
+        .encode(
+            x=alt.X("Returnee Students:Q"),
+            y=alt.Y("Province:N", sort="-x"),
+            text=alt.Text("Returnee Students:Q", format=","),
+        )
+    )
+    chart = alt.layer(chart, labels).properties(height=460, title="Tool 5 - Returnee Students by Zone and Province")
     st.altair_chart(modernize_chart(chart), use_container_width=True)
 
 
@@ -946,6 +966,8 @@ def render_tool5_returnee_climate_chart(dataframe: pd.DataFrame) -> None:
     if chart_data.empty:
         return
     total = int(chart_data["Returnee Students"].sum())
+    chart_data["Share"] = chart_data["Returnee Students"] / total if total else 0
+    chart_data["Slice Label"] = chart_data.apply(lambda row: f"{int(row['Returnee Students']):,}\n{row['Share']:.0%}", axis=1)
     base = alt.Chart(chart_data)
     arc = (
         base
@@ -958,8 +980,8 @@ def render_tool5_returnee_climate_chart(dataframe: pd.DataFrame) -> None:
     )
     labels = (
         base
-        .mark_text(radius=146, font=CHART_FONT, fontSize=11, fontWeight=800, color=CHART_TEXT)
-        .encode(text=alt.Text("Returnee Students:Q", format=","))
+        .mark_text(radius=102, font=CHART_FONT, fontSize=10, fontWeight=900, color="#f8fbff", stroke="#06111f", strokeWidth=0.35)
+        .encode(text=alt.Text("Slice Label:N"))
     )
     center = alt.Chart(pd.DataFrame({"Total": [f"{total:,}"]})).mark_text(
         font=CHART_FONT, fontSize=24, fontWeight=900, color=CHART_TEXT, dy=-2
@@ -1041,6 +1063,8 @@ def render_tool5_host_students_circular_charts(dataframe: pd.DataFrame) -> None:
     with left_col:
         if not zone_province_data.empty:
             total = int(zone_province_data["Host Students"].sum())
+            zone_province_data["Share"] = zone_province_data["Host Students"] / total if total else 0
+            zone_province_data["Slice Label"] = zone_province_data.apply(lambda row: f"{int(row['Host Students']):,}\n{row['Share']:.0%}", axis=1)
             base = alt.Chart(zone_province_data)
             zone_arc = (
                 base
@@ -1053,8 +1077,8 @@ def render_tool5_host_students_circular_charts(dataframe: pd.DataFrame) -> None:
             )
             zone_labels = (
                 base
-                .mark_text(radius=142, font=CHART_FONT, fontSize=11, fontWeight=800, color=CHART_TEXT)
-                .encode(text=alt.Text("Host Students:Q", format=","))
+                .mark_text(radius=99, font=CHART_FONT, fontSize=10, fontWeight=900, color="#f8fbff", stroke="#06111f", strokeWidth=0.35)
+                .encode(text=alt.Text("Slice Label:N"))
             )
             zone_center = alt.Chart(pd.DataFrame({"Total": [f"{total:,}"]})).mark_text(
                 font=CHART_FONT, fontSize=23, fontWeight=900, color=CHART_TEXT, dy=-2
@@ -1064,6 +1088,8 @@ def render_tool5_host_students_circular_charts(dataframe: pd.DataFrame) -> None:
     with right_col:
         if not climate_data.empty:
             total = int(climate_data["Host Students"].sum())
+            climate_data["Share"] = climate_data["Host Students"] / total if total else 0
+            climate_data["Slice Label"] = climate_data.apply(lambda row: f"{int(row['Host Students']):,}\n{row['Share']:.0%}", axis=1)
             base = alt.Chart(climate_data)
             climate_arc = (
                 base
@@ -1076,8 +1102,8 @@ def render_tool5_host_students_circular_charts(dataframe: pd.DataFrame) -> None:
             )
             climate_labels = (
                 base
-                .mark_text(radius=142, font=CHART_FONT, fontSize=11, fontWeight=800, color=CHART_TEXT)
-                .encode(text=alt.Text("Host Students:Q", format=","))
+                .mark_text(radius=99, font=CHART_FONT, fontSize=10, fontWeight=900, color="#f8fbff", stroke="#06111f", strokeWidth=0.35)
+                .encode(text=alt.Text("Slice Label:N"))
             )
             climate_center = alt.Chart(pd.DataFrame({"Total": [f"{total:,}"]})).mark_text(
                 font=CHART_FONT, fontSize=23, fontWeight=900, color=CHART_TEXT, dy=-2
@@ -1162,7 +1188,21 @@ def render_tool5_experience_duration_gender_charts(dataframe: pd.DataFrame) -> N
         .properties(height=420, title="Tool 5 · Experience Duration (Avg vs Median)")
     )
 
+    left_labels = (
+        alt.Chart(duration_long)
+        .mark_text(align="left", baseline="middle", dx=7, color=CHART_TEXT, font=CHART_FONT, fontSize=10, fontWeight=900)
+        .encode(
+            x=alt.X("Duration:Q"),
+            y=alt.Y("Respondent Gender:N", sort="-x"),
+            xOffset=alt.XOffset("Metric:N"),
+            text=alt.Text("Duration:Q", format=".2f"),
+        )
+    )
+    left_chart = alt.layer(left_chart, left_labels).properties(height=420, title="Tool 5 - Experience Duration (Avg vs Median)")
+
     total = int(chart_data["Responses"].sum())
+    chart_data["Share"] = chart_data["Responses"] / total if total else 0
+    chart_data["Slice Label"] = chart_data.apply(lambda row: f"{int(row['Responses']):,}\n{row['Share']:.0%}", axis=1)
     right_base = alt.Chart(chart_data)
     right_arc = (
         right_base
@@ -1175,8 +1215,8 @@ def render_tool5_experience_duration_gender_charts(dataframe: pd.DataFrame) -> N
     )
     right_labels = (
         right_base
-        .mark_text(radius=146, font=CHART_FONT, fontSize=11, fontWeight=800, color=CHART_TEXT)
-        .encode(text=alt.Text("Responses:Q", format=","))
+        .mark_text(radius=103, font=CHART_FONT, fontSize=10, fontWeight=900, color="#f8fbff", stroke="#06111f", strokeWidth=0.35)
+        .encode(text=alt.Text("Slice Label:N"))
     )
     right_center = alt.Chart(pd.DataFrame({"Total": [f"{total:,}"]})).mark_text(
         font=CHART_FONT, fontSize=23, fontWeight=900, color=CHART_TEXT, dy=-2
@@ -1427,7 +1467,27 @@ def render_tool5_attendance_host_returnee_charts(dataframe: pd.DataFrame) -> Non
                     tooltip=["Day:N", alt.Tooltip("Present %:Q", format=".2f")],
                 )
             )
-            chart = alt.layer(bars, total_line, pct_line).resolve_scale(y="independent").properties(
+            bar_labels = (
+                alt.Chart(long_counts)
+                .mark_text(dy=-7, color=CHART_TEXT, font=CHART_FONT, fontSize=10, fontWeight=900)
+                .encode(
+                    x=alt.X("Day:N"),
+                    y=alt.Y("Students:Q"),
+                    xOffset=alt.XOffset("Gender:N"),
+                    text=alt.Text("Students:Q", format=","),
+                )
+            )
+            total_labels = (
+                alt.Chart(group_data)
+                .mark_text(dy=-14, color="#bbf7d0", font=CHART_FONT, fontSize=10, fontWeight=900)
+                .encode(x=alt.X("Day:N"), y=alt.Y("Total:Q"), text=alt.Text("Total:Q", format=","))
+            )
+            pct_labels = (
+                alt.Chart(group_data)
+                .mark_text(dy=16, color="#ddd6fe", font=CHART_FONT, fontSize=10, fontWeight=900)
+                .encode(x=alt.X("Day:N"), y=alt.Y("Present %:Q"), text=alt.Text("Present %:Q", format=".1f"))
+            )
+            chart = alt.layer(bars, bar_labels, total_line, total_labels, pct_line, pct_labels).resolve_scale(y="independent").properties(
                 height=430,
                 title=f"Tool 5 · {group_name} Attendance (Day 1-3)",
             )
@@ -1569,6 +1629,7 @@ def render_donut_chart(dataframe: pd.DataFrame, category: str, title: str, color
         return
     total = int(chart_data["Count"].sum())
     chart_data["Share"] = chart_data["Count"] / total if total else 0
+    chart_data["Slice Label"] = chart_data.apply(lambda row: f"{int(row['Count']):,}\n{row['Share']:.0%}", axis=1)
     arc = (
         alt.Chart(chart_data)
         .mark_arc(innerRadius=68, outerRadius=112, cornerRadius=6, padAngle=0.025)
@@ -1580,8 +1641,8 @@ def render_donut_chart(dataframe: pd.DataFrame, category: str, title: str, color
     )
     labels = (
         alt.Chart(chart_data)
-        .mark_text(radius=128, font=CHART_FONT, fontSize=10, fontWeight=800, color=CHART_TEXT)
-        .encode(text=alt.Text("Count:Q", format=","))
+        .mark_text(radius=90, font=CHART_FONT, fontSize=10, fontWeight=900, color="#f8fbff", stroke="#06111f", strokeWidth=0.35)
+        .encode(text=alt.Text("Slice Label:N"))
     )
     center = alt.Chart(pd.DataFrame({"Total": [f"{total:,}"]})).mark_text(font=CHART_FONT, fontSize=25, fontWeight=900, color=CHART_TEXT, dy=-4).encode(text="Total:N")
     chart = alt.layer(arc, labels, center).properties(height=CHART_HEIGHT + 18, title=alt.TitleParams(text=title, anchor="start", offset=24), padding={"top": 22, "right": 18, "bottom": 16, "left": 18})
@@ -1594,16 +1655,21 @@ def render_numeric_chart(dataframe: pd.DataFrame, column: str, title: str) -> No
         st.info("No numeric values are available for this chart.")
         return
     chart_data = pd.DataFrame({"Value": values})
-    chart = (
+    base = (
         alt.Chart(chart_data)
-        .mark_bar(color="#38bdf8", opacity=0.86)
         .encode(
             x=alt.X("Value:Q", bin=alt.Bin(maxbins=24), title=column),
             y=alt.Y("count():Q", title="Rows"),
             tooltip=[alt.Tooltip("count():Q", title="Rows")],
         )
-        .properties(height=CHART_HEIGHT, title=title)
     )
+    bars = base.mark_bar(color="#38bdf8", opacity=0.86)
+    labels = (
+        base
+        .mark_text(dy=-5, color=CHART_TEXT, font=CHART_FONT, fontSize=10, fontWeight=900)
+        .encode(text=alt.Text("count():Q", format=","))
+    )
+    chart = alt.layer(bars, labels).properties(height=CHART_HEIGHT, title=title)
     st.altair_chart(modernize_chart(chart), use_container_width=True)
 
 
@@ -1614,16 +1680,19 @@ def render_date_chart(dataframe: pd.DataFrame, column: str, title: str) -> None:
         return
     chart_data = pd.DataFrame({"Date": dates.dt.date.astype(str)})
     chart_data = chart_data.groupby("Date").size().reset_index(name="Count")
-    chart = (
+    base = (
         alt.Chart(chart_data)
-        .mark_line(point=True, color="#22c55e")
         .encode(
             x=alt.X("Date:T", title=None),
             y=alt.Y("Count:Q", title="Rows"),
             tooltip=["Date:T", alt.Tooltip("Count:Q", format=",")],
         )
-        .properties(height=CHART_HEIGHT, title=title)
     )
+    line = base.mark_line(point=True, color="#22c55e")
+    labels = base.mark_text(dy=-12, color=CHART_TEXT, font=CHART_FONT, fontSize=10, fontWeight=900).encode(
+        text=alt.Text("Count:Q", format=",")
+    )
+    chart = alt.layer(line, labels).properties(height=CHART_HEIGHT, title=title)
     st.altair_chart(modernize_chart(chart), use_container_width=True)
 
 
@@ -1657,7 +1726,7 @@ def render_standards_matrix(dataframe: pd.DataFrame, schema: dict[str, Any], tit
     if chart_data.empty:
         st.info("No standards matrix is available for this dataset.")
         return
-    chart = (
+    heatmap = (
         alt.Chart(chart_data)
         .mark_rect(cornerRadius=4)
         .encode(
@@ -1668,6 +1737,12 @@ def render_standards_matrix(dataframe: pd.DataFrame, schema: dict[str, Any], tit
         )
         .properties(height=min(max(len(chart_data["Question"].unique()) * 24, 360), 760), title=title)
     )
+    labels = (
+        alt.Chart(chart_data)
+        .mark_text(color="#f8fbff", font=CHART_FONT, fontSize=10, fontWeight=900)
+        .encode(x=alt.X("Response:N"), y=alt.Y("Question:N", sort="-x"), text=alt.Text("Percent:Q", format=".1f"))
+    )
+    chart = alt.layer(heatmap, labels).properties(height=min(max(len(chart_data["Question"].unique()) * 24, 360), 760), title=title)
     st.altair_chart(modernize_chart(chart), use_container_width=True)
 
 
@@ -1708,7 +1783,17 @@ def render_numeric_combo_chart(dataframe: pd.DataFrame, schema: dict[str, Any], 
         .mark_point(size=82, filled=True, color="#f97316", stroke="#f8fbff", strokeWidth=1)
         .encode(x="Median:Q", y=alt.Y("Indicator:N", sort="-x", title=None), tooltip=["Indicator:N", "Median:Q"])
     )
-    chart = alt.layer(bars, median_points).properties(height=min(max(len(chart_data) * 28, 360), 640), title=title)
+    labels = (
+        alt.Chart(chart_data)
+        .mark_text(align="left", baseline="middle", dx=7, color=CHART_TEXT, font=CHART_FONT, fontSize=10, fontWeight=900)
+        .encode(x=alt.X("Average:Q"), y=alt.Y("Indicator:N", sort="-x"), text=alt.Text("Average:Q", format=".2f"))
+    )
+    median_labels = (
+        alt.Chart(chart_data)
+        .mark_text(align="left", baseline="middle", dx=7, color="#fed7aa", font=CHART_FONT, fontSize=10, fontWeight=900)
+        .encode(x=alt.X("Median:Q"), y=alt.Y("Indicator:N", sort="-x"), text=alt.Text("Median:Q", format=".2f"))
+    )
+    chart = alt.layer(bars, labels, median_points, median_labels).properties(height=min(max(len(chart_data) * 28, 360), 640), title=title)
     st.altair_chart(modernize_chart(chart), use_container_width=True)
 
 
@@ -2541,6 +2626,16 @@ def render_gps_distance_intelligence(gps: pd.DataFrame, province: str | None, di
                 )
                 .properties(height=CHART_HEIGHT, title="Nearest Class Distance")
             )
+            labels = (
+                alt.Chart(nearest_chart_data)
+                .mark_text(align="left", baseline="middle", dx=7, color=CHART_TEXT, font=CHART_FONT, fontSize=10, fontWeight=900)
+                .encode(
+                    x=alt.X("Nearest Distance (km):Q"),
+                    y=alt.Y("Class:N", sort="x"),
+                    text=alt.Text("Nearest Distance (km):Q", format=".3f"),
+                )
+            )
+            chart = alt.layer(chart, labels).properties(height=CHART_HEIGHT, title="Nearest Class Distance")
             st.altair_chart(modernize_chart(chart), use_container_width=True)
 
     if pairwise.empty:
@@ -2650,6 +2745,16 @@ def render_gps_tracking(dataframe: pd.DataFrame, widget_key: str = "gps") -> Non
                 )
                 .properties(height=430, title="GPS Altitude Distribution")
             )
+            altitude_labels = (
+                alt.Chart(gps.dropna(subset=["altitude"]))
+                .mark_text(dy=-5, color=CHART_TEXT, font=CHART_FONT, fontSize=10, fontWeight=900)
+                .encode(
+                    x=alt.X("altitude:Q", bin=alt.Bin(maxbins=18)),
+                    y=alt.Y("count():Q"),
+                    text=alt.Text("count():Q", format=","),
+                )
+            )
+            altitude_chart = alt.layer(altitude_chart, altitude_labels).properties(height=430, title="GPS Altitude Distribution")
             st.altair_chart(modernize_chart(altitude_chart), use_container_width=True)
 
     st.markdown("<div style='height: 34px;'></div>", unsafe_allow_html=True)
@@ -2721,6 +2826,16 @@ def render_submission_timeline(dataframe: pd.DataFrame) -> None:
         )
         .properties(height=CHART_HEIGHT, title="Submission Timeline by Geography")
     )
+    labels = (
+        alt.Chart(grouped)
+        .mark_text(dy=-9, color=CHART_TEXT, font=CHART_FONT, fontSize=9, fontWeight=900)
+        .encode(
+            x=alt.X("Date:T"),
+            y=alt.Y("Count:Q"),
+            text=alt.Text("Count:Q", format=","),
+        )
+    )
+    chart = alt.layer(chart, labels).properties(height=CHART_HEIGHT, title="Submission Timeline by Geography")
     st.altair_chart(modernize_chart(chart), use_container_width=True)
 
 
@@ -2752,6 +2867,16 @@ def render_category_heatmap(dataframe: pd.DataFrame, row_candidates: list[str], 
         )
         .properties(height=440, title=title)
     )
+    labels = (
+        alt.Chart(chart_data)
+        .mark_text(color="#f8fbff", font=CHART_FONT, fontSize=10, fontWeight=900)
+        .encode(
+            x=alt.X(f"{column_column}:N"),
+            y=alt.Y(f"{row_column}:N"),
+            text=alt.Text("Count:Q", format=","),
+        )
+    )
+    chart = alt.layer(chart, labels).properties(height=440, title=title)
     st.altair_chart(modernize_chart(chart), use_container_width=True)
 
 
@@ -2801,6 +2926,16 @@ def render_completeness_by_group(dataframe: pd.DataFrame, schema: dict[str, Any]
         )
         .properties(height=430, title=f"Required Completeness by {group_column}")
     )
+    labels = (
+        alt.Chart(chart_data)
+        .mark_text(align="left", baseline="middle", dx=7, color=CHART_TEXT, font=CHART_FONT, fontSize=10, fontWeight=900)
+        .encode(
+            x=alt.X("Average Completeness %:Q"),
+            y=alt.Y("Group:N", sort="x"),
+            text=alt.Text("Average Completeness %:Q", format=".1f"),
+        )
+    )
+    chart = alt.layer(chart, labels).properties(height=430, title=f"Required Completeness by {group_column}")
     st.altair_chart(modernize_chart(chart), use_container_width=True)
 
 
@@ -2833,6 +2968,12 @@ def render_numeric_correlation_heatmap(dataframe: pd.DataFrame, schema: dict[str
         )
         .properties(height=520, title="Numeric Correlation Heatmap")
     )
+    labels = (
+        alt.Chart(corr)
+        .mark_text(color="#f8fbff", font=CHART_FONT, fontSize=9, fontWeight=900)
+        .encode(x=alt.X("Column B:N"), y=alt.Y("Column A:N"), text=alt.Text("Correlation:Q", format=".2f"))
+    )
+    chart = alt.layer(chart, labels).properties(height=520, title="Numeric Correlation Heatmap")
     st.altair_chart(modernize_chart(chart), use_container_width=True)
 
 
@@ -2873,6 +3014,17 @@ def render_gender_pair_chart(dataframe: pd.DataFrame) -> None:
         )
         .properties(height=420, title="Gender-Paired Numeric Indicators")
     )
+    labels = (
+        alt.Chart(chart_data)
+        .mark_text(dy=-7, color=CHART_TEXT, font=CHART_FONT, fontSize=10, fontWeight=900)
+        .encode(
+            x=alt.X("Indicator:N"),
+            y=alt.Y("Total:Q"),
+            xOffset=alt.XOffset("Gender:N"),
+            text=alt.Text("Total:Q", format=","),
+        )
+    )
+    chart = alt.layer(chart, labels).properties(height=420, title="Gender-Paired Numeric Indicators")
     st.altair_chart(modernize_chart(chart), use_container_width=True)
 
 
@@ -2902,6 +3054,16 @@ def render_multi_select_signal_mix(dataframe: pd.DataFrame, schema: dict[str, An
         )
         .properties(height=480, title="Multi-Select Response Signals")
     )
+    labels = (
+        alt.Chart(chart_data)
+        .mark_text(align="left", baseline="middle", dx=7, color=CHART_TEXT, font=CHART_FONT, fontSize=10, fontWeight=900)
+        .encode(
+            x=alt.X("Count:Q"),
+            y=alt.Y("Response:N", sort="-x"),
+            text=alt.Text("Count:Q", format=","),
+        )
+    )
+    chart = alt.layer(chart, labels).properties(height=480, title="Multi-Select Response Signals")
     st.altair_chart(modernize_chart(chart), use_container_width=True)
 
 
@@ -2996,6 +3158,16 @@ def render_missingness_chart(profile: pd.DataFrame) -> None:
         )
         .properties(height=520, title="Completeness and Missingness by Column")
     )
+    labels = (
+        alt.Chart(chart_data)
+        .mark_text(align="left", baseline="middle", dx=7, color=CHART_TEXT, font=CHART_FONT, fontSize=10, fontWeight=900)
+        .encode(
+            x=alt.X("Percent:Q"),
+            y=alt.Y("Column:N", sort="-x"),
+            text=alt.Text("Percent:Q", format=".1f"),
+        )
+    )
+    chart = alt.layer(chart, labels).properties(height=520, title="Completeness and Missingness by Column")
     st.altair_chart(modernize_chart(chart), use_container_width=True)
 
 
@@ -3020,6 +3192,17 @@ def render_clean_rejected_stack(summary: pd.DataFrame) -> None:
         )
         .properties(height=390, title="Clean Data vs Rejected Exclusions")
     )
+    labels = (
+        alt.Chart(chart_data)
+        .mark_text(dy=-7, color=CHART_TEXT, font=CHART_FONT, fontSize=10, fontWeight=900)
+        .encode(
+            x=alt.X("Dataset:N"),
+            y=alt.Y("Rows:Q"),
+            xOffset=alt.XOffset("Metric:N"),
+            text=alt.Text("Rows:Q", format=","),
+        )
+    )
+    chart = alt.layer(chart, labels).properties(height=390, title="Clean Data vs Rejected Exclusions")
     st.altair_chart(modernize_chart(chart), use_container_width=True)
 
 
@@ -3043,6 +3226,16 @@ def render_coverage_bubble(summary: pd.DataFrame) -> None:
         )
         .properties(height=390, title="Dataset Detection Quality Map")
     )
+    labels = (
+        alt.Chart(chart_data)
+        .mark_text(dy=-18, color=CHART_TEXT, font=CHART_FONT, fontSize=10, fontWeight=900)
+        .encode(
+            x=alt.X("Rows:Q"),
+            y=alt.Y("Schema Coverage %:Q"),
+            text=alt.Text("Schema Coverage %:Q", format=".1f"),
+        )
+    )
+    chart = alt.layer(chart, labels).properties(height=390, title="Dataset Detection Quality Map")
     st.altair_chart(modernize_chart(chart), use_container_width=True)
 
 
