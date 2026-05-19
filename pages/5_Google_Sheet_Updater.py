@@ -318,11 +318,6 @@ apply_liquid_glass_theme(
     accent="#f59e0b",
 )
 
-render_glass_section(
-    "SurveyCTO Import Workflow",
-    "Load Tool 2, Tool 3, and Tool 5 directly from SurveyCTO, then append only new keys to QA_Log.",
-)
-
 transformed_datasets: list[tuple[str, pd.DataFrame]] = []
 processing_errors: list[str] = []
 file_profile_rows: list[dict[str, object]] = []
