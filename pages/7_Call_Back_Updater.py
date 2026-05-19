@@ -15,7 +15,7 @@ from services.google_sheets import (
     update_summary_timestamp,
 )
 from services.ui_theme import apply_liquid_glass_theme, render_glass_section
-from services.google_drive import get_drive_folder_id, read_drive_sheets_by_name
+from services.surveycto import fetch_form_dataframe
 
 
 QA_LOG_SHEET = "QA_Log"
@@ -39,12 +39,11 @@ CHART_TEXT = "#dbe7ff"
 CHART_MUTED = "#93a4c4"
 CHART_GRID = "rgba(219, 231, 255, 0.12)"
 CHART_HEIGHT = 360
-GOOGLE_DRIVE_DATASET_KEYS = [
-    "Tool 2 ECE Classroom Observation.xlsx",
-    "Tool 3 ECE Parent Interview.xlsx",
-    "Tool 5 TLS Classroom Observation.xlsx",
+SURVEYCTO_DATASETS = [
+    {"display_name": "Tool 2 ECE Classroom Observation", "form_id": "ECE_Tool2_Classroom_Observation"},
+    {"display_name": "Tool 3 ECE Parent Interview", "form_id": "ECE_Tool3_Parent_Interview"},
+    {"display_name": "Tool 5 TLS Classroom Observation", "form_id": "TLS_Tool5_Classroom_Observation"},
 ]
-DATASET_FOLDER_DEFAULT_ID = "1VFgsazs0OkRI5kmmrF1pXTr6RrPnu3hx"
 
 
 def to_text(value: object) -> str:
@@ -208,22 +207,16 @@ def build_dataset_index() -> tuple[dict[str, dict[str, str]], list[str], list[st
     dataset_columns: OrderedDict[str, None] = OrderedDict()
     errors: list[str] = []
 
-    for dataset_name in GOOGLE_DRIVE_DATASET_KEYS:
+    for dataset_meta in SURVEYCTO_DATASETS:
         try:
-            dataset_folder_id = str(st.secrets.get("GOOGLE_DRIVE_DATASET_FOLDER_ID", "")).strip() or get_drive_folder_id() or DATASET_FOLDER_DEFAULT_ID
-            sheets = read_drive_sheets_by_name(dataset_name, dataset_folder_id)
-            if "data" in sheets:
-                dataframe = sheets["data"].fillna("")
-            elif sheets:
-                first_sheet = next(iter(sheets.keys()))
-                dataframe = sheets[first_sheet].fillna("")
-            else:
-                errors.append(f"{dataset_name}: no readable worksheet was found.")
+            dataframe = fetch_form_dataframe(dataset_meta["form_id"]).fillna("")
+            if dataframe.empty:
+                errors.append(f"{dataset_meta['display_name']}: no rows found in SurveyCTO.")
                 continue
 
             key_column = first_existing_column(dataframe, ["KEY", "Key", "key", "_uuid", "uuid", "instanceid", "InstanceID"])
             if not key_column:
-                errors.append(f"{dataset_name}: KEY column was not found.")
+                errors.append(f"{dataset_meta['display_name']}: KEY column was not found.")
                 continue
 
             for column in dataframe.columns:
@@ -239,7 +232,7 @@ def build_dataset_index() -> tuple[dict[str, dict[str, str]], list[str], list[st
                     if value and not current.get(to_text(column)):
                         current[to_text(column)] = value
         except Exception as exc:
-            errors.append(f"{dataset_name}: {exc}")
+            errors.append(f"{dataset_meta['display_name']} ({dataset_meta['form_id']}): {exc}")
     return dict(dataset_index), list(dataset_columns.keys()), errors
 
 
@@ -408,7 +401,7 @@ apply_liquid_glass_theme(
 
 render_glass_section(
     "Automated Call-Back Workflow",
-    "Rows with Call_back = True in QA_Log become Call-Back rows. Call_Back By is filled from QC By; Old_Value is read automatically from Google Drive datasets using KEY and Question.",
+    "Rows with Call_back = True in QA_Log become Call-Back rows. Call_Back By is filled from QC By; Old_Value is read automatically from SurveyCTO datasets using KEY and Question.",
 )
 
 try:
@@ -419,18 +412,18 @@ except GoogleSheetsConnectionError as exc:
 
 upload_left, upload_right = st.columns(2, gap="large")
 with upload_left:
-    st.info("Source datasets are loaded automatically from Google Drive.")
+    st.info("Source datasets are loaded automatically from SurveyCTO forms.")
 
 dataset_index, dataset_columns, dataset_errors = build_dataset_index()
 base_call_back_rows, skipped_blank_keys = build_call_back_rows(qa_log, dataset_index)
 
 with upload_right:
     st.markdown("### Dataset lookup")
-    st.caption("Question must match a dataset column label loaded from Google Drive. You can edit Question below before syncing.")
+    st.caption("Question must match a dataset column label loaded from SurveyCTO. You can edit Question below before syncing.")
     if dataset_columns:
         st.dataframe(pd.DataFrame({"Available dataset labels": dataset_columns}), use_container_width=True, hide_index=True, height=180)
     else:
-        st.info("No dataset labels were loaded from Google Drive.")
+        st.info("No dataset labels were loaded from SurveyCTO.")
 
 metric_cols = st.columns(4, gap="large")
 with metric_cols[0]:

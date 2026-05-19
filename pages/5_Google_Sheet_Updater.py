@@ -1,5 +1,4 @@
 import re
-from io import BytesIO
 
 import altair as alt
 import pandas as pd
@@ -12,9 +11,15 @@ from services.google_sheets import (
     update_summary_timestamp,
 )
 from services.ui_theme import apply_liquid_glass_theme, render_glass_section
+from services.surveycto import fetch_form_dataframe
 
 
 TARGET_WORKSHEET = "QA_Log"
+SURVEYCTO_DATASETS = [
+    {"display_name": "Tool 2 ECE Classroom Observation", "form_id": "ECE_Tool2_Classroom_Observation"},
+    {"display_name": "Tool 3 ECE Parent Interview", "form_id": "ECE_Tool3_Parent_Interview"},
+    {"display_name": "Tool 5 TLS Classroom Observation", "form_id": "TLS_Tool5_Classroom_Observation"},
+]
 TARGET_COLUMNS = [
     "KEY",
     "Tool Name",
@@ -176,21 +181,6 @@ def render_donut_chart(dataframe: pd.DataFrame, category: str, title: str, color
     st.altair_chart(modernize_chart(alt.layer(arc, center).properties(height=CHART_HEIGHT, title=title)), use_container_width=True)
 
 
-def read_uploaded_file(uploaded_file) -> pd.DataFrame:
-    return read_uploaded_file_bytes(uploaded_file.name, uploaded_file.getvalue())
-
-
-@st.cache_data(ttl=180, show_spinner=False)
-def read_uploaded_file_bytes(file_name: str, file_bytes: bytes) -> pd.DataFrame:
-    file_name = file_name.lower()
-    buffer = BytesIO(file_bytes)
-    if file_name.endswith(".csv"):
-        return pd.read_csv(buffer)
-    if file_name.endswith(".xlsx") or file_name.endswith(".xls"):
-        return pd.read_excel(buffer)
-    raise ValueError("Only CSV and Excel files are supported.")
-
-
 def normalize_column_name(name: str) -> str:
     return re.sub(r"[^a-z0-9]", "", str(name).lower())
 
@@ -215,11 +205,11 @@ def get_column_series(dataframe: pd.DataFrame, logical_name: str) -> pd.Series:
     return dataframe[column_name]
 
 
-def extract_tool_name(file_name: str) -> str:
-    match = re.search(r"(Tool\s*\d+)", file_name, flags=re.IGNORECASE)
+def extract_tool_name(source_name: str) -> str:
+    match = re.search(r"(Tool\s*\d+)", source_name, flags=re.IGNORECASE)
     if match:
         return re.sub(r"\s+", " ", match.group(1)).title()
-    return file_name.rsplit(".", 1)[0]
+    return source_name
 
 
 def build_tpm_id(series: pd.Series) -> str:
@@ -324,144 +314,138 @@ def consolidate_uploaded_rows(transformed_datasets: list[tuple[str, pd.DataFrame
 
 apply_liquid_glass_theme(
     "Google Sheet Updater",
-    "Import source files and append only new validated rows into QA_Log.",
+    "Load datasets directly from SurveyCTO and append only new validated rows into QA_Log.",
     accent="#f59e0b",
 )
 
 render_glass_section(
-    "Import Workflow",
-    "Select source files and append only new keys to QA_Log.",
+    "SurveyCTO Import Workflow",
+    "Load Tool 2, Tool 3, and Tool 5 directly from SurveyCTO, then append only new keys to QA_Log.",
 )
 
-uploaded_files = st.file_uploader(
-    "Select one or more files",
-    type=["csv", "xlsx", "xls"],
-    accept_multiple_files=True,
-)
+transformed_datasets: list[tuple[str, pd.DataFrame]] = []
+processing_errors: list[str] = []
+file_profile_rows: list[dict[str, object]] = []
 
-if uploaded_files:
-    transformed_datasets: list[tuple[str, pd.DataFrame]] = []
-    processing_errors: list[str] = []
-    file_profile_rows: list[dict[str, object]] = []
-
-    for uploaded_file in uploaded_files:
-        try:
-            dataframe = read_uploaded_file(uploaded_file)
-            transformed = transform_dataset(dataframe, uploaded_file.name)
-            transformed_datasets.append((uploaded_file.name, transformed))
-            file_profile_rows.append(
-                {
-                    "File": uploaded_file.name,
-                    "Tool Name": extract_tool_name(uploaded_file.name),
-                    "Source Rows": len(dataframe),
-                    "Valid KEY Rows": int(transformed["KEY"].astype(str).str.strip().ne("").sum()),
-                    "Missing KEY Rows": int(transformed["KEY"].astype(str).str.strip().eq("").sum()),
-                    "Unique Keys": count_unique(transformed, "KEY"),
-                }
-            )
-        except Exception as exc:
-            processing_errors.append(f"{uploaded_file.name}: {exc}")
-
-    consolidated_rows = consolidate_uploaded_rows(transformed_datasets)
-    file_profile = pd.DataFrame(file_profile_rows)
-
+for dataset_meta in SURVEYCTO_DATASETS:
     try:
-        existing_keys = {
-            key.strip()
-            for key in get_worksheet_column_values(TARGET_WORKSHEET, "KEY")
-            if key.strip()
-        }
-    except GoogleSheetsConnectionError as exc:
-        st.error(str(exc))
-        st.stop()
-
-    rows_to_add = consolidated_rows[~consolidated_rows["KEY"].isin(existing_keys)].copy() if not consolidated_rows.empty else pd.DataFrame(columns=TARGET_COLUMNS)
-    duplicate_rows = len(consolidated_rows) - len(rows_to_add) if not consolidated_rows.empty else 0
-
-    metric_cols = st.columns(4, gap="large")
-    with metric_cols[0]:
-        render_luxury_metric("Uploaded files", f"{len(uploaded_files):,}", f"Processed successfully: {len(transformed_datasets):,}.", "#2563eb")
-    with metric_cols[1]:
-        render_luxury_metric("Consolidated rows", f"{len(consolidated_rows):,}", "Unique KEY rows after cross-file consolidation.", "#8b5cf6")
-    with metric_cols[2]:
-        render_luxury_metric("New QA_Log rows", f"{len(rows_to_add):,}", f"Existing duplicate keys skipped: {duplicate_rows:,}.", "#22c55e")
-    with metric_cols[3]:
-        missing_keys = int(file_profile["Missing KEY Rows"].sum()) if not file_profile.empty else 0
-        render_luxury_metric("Missing KEY rows", f"{missing_keys:,}", f"Processing errors: {len(processing_errors):,}.", "#f97316")
-
-    if processing_errors:
-        st.warning("Some files could not be processed: " + " | ".join(processing_errors))
-
-    st.markdown("<div style='height: 40px;'></div>", unsafe_allow_html=True)
-
-    profile_left, profile_right = st.columns(2, gap="large")
-    with profile_left:
-        render_bar_chart(file_profile.rename(columns={"Source Rows": "Count"}), "File", "Uploaded File Volume", "#38bdf8")
-    with profile_right:
-        render_donut_chart(top_counts(consolidated_rows, "Tool Name", 10), "Tool Name", "Tool Mix Ready for QA_Log", ["#2563eb", "#22c55e", "#f97316", "#8b5cf6", "#0f766e", "#ef4444"])
-
-    st.markdown("<div style='height: 40px;'></div>", unsafe_allow_html=True)
-
-    geo_left, geo_right = st.columns(2, gap="large")
-    with geo_left:
-        render_bar_chart(top_counts(consolidated_rows, "Province", 12), "Province", "Rows by Province", "#0f766e")
-    with geo_right:
-        render_bar_chart(top_counts(consolidated_rows, "District", 12), "District", "Rows by District", "#f97316")
-
-    st.markdown("<div style='height: 40px;'></div>", unsafe_allow_html=True)
-
-    quality_left, quality_right = st.columns(2, gap="large")
-    with quality_left:
-        quality_mix = pd.DataFrame(
+        source_df = fetch_form_dataframe(dataset_meta["form_id"]).fillna("")
+        transformed = transform_dataset(source_df, dataset_meta["display_name"])
+        transformed_datasets.append((dataset_meta["display_name"], transformed))
+        file_profile_rows.append(
             {
-                "Signal": ["New rows", "Duplicate keys", "Missing KEY rows"],
-                "Count": [len(rows_to_add), duplicate_rows, missing_keys],
+                "Dataset": dataset_meta["display_name"],
+                "Form ID": dataset_meta["form_id"],
+                "Tool Name": extract_tool_name(dataset_meta["display_name"]),
+                "Source Rows": len(source_df),
+                "Valid KEY Rows": int(transformed["KEY"].astype(str).str.strip().ne("").sum()),
+                "Missing KEY Rows": int(transformed["KEY"].astype(str).str.strip().eq("").sum()),
+                "Unique Keys": count_unique(transformed, "KEY"),
             }
         )
-        render_donut_chart(quality_mix, "Signal", "Append Readiness Mix", ["#22c55e", "#f97316", "#ef4444"])
-    with quality_right:
-        render_bar_chart(top_counts(consolidated_rows, "Surveyor_Name", 12), "Surveyor_Name", "Rows by Surveyor", "#8b5cf6")
+    except Exception as exc:
+        processing_errors.append(f"{dataset_meta['display_name']} ({dataset_meta['form_id']}): {exc}")
 
-    st.markdown("<div style='height: 40px;'></div>", unsafe_allow_html=True)
+consolidated_rows = consolidate_uploaded_rows(transformed_datasets)
+file_profile = pd.DataFrame(file_profile_rows)
 
-    table_left, table_right = st.columns(2, gap="large")
-    with table_left:
-        st.markdown("### File Quality Profile")
-        if file_profile.empty:
-            st.info("No file profile is available.")
-        else:
-            st.dataframe(file_profile, use_container_width=True, hide_index=True, height=460)
+try:
+    existing_keys = {
+        key.strip()
+        for key in get_worksheet_column_values(TARGET_WORKSHEET, "KEY")
+        if key.strip()
+    }
+except GoogleSheetsConnectionError as exc:
+    st.error(str(exc))
+    st.stop()
 
-    with table_right:
-        st.markdown("### Rows Ready To Append")
-        if rows_to_add.empty:
-            st.info("No new rows are ready to append.")
-        else:
-            st.dataframe(rows_to_add[TARGET_COLUMNS], use_container_width=True, hide_index=True, height=460)
+rows_to_add = consolidated_rows[~consolidated_rows["KEY"].isin(existing_keys)].copy() if not consolidated_rows.empty else pd.DataFrame(columns=TARGET_COLUMNS)
+duplicate_rows = len(consolidated_rows) - len(rows_to_add) if not consolidated_rows.empty else 0
 
-    if not consolidated_rows.empty:
-        if st.button(f"Add Data To {TARGET_WORKSHEET}", type="primary"):
-            if processing_errors:
-                st.error("Some files could not be processed.")
+metric_cols = st.columns(4, gap="large")
+with metric_cols[0]:
+    render_luxury_metric("SurveyCTO datasets", f"{len(SURVEYCTO_DATASETS):,}", f"Loaded successfully: {len(transformed_datasets):,}.", "#2563eb")
+with metric_cols[1]:
+    render_luxury_metric("Consolidated rows", f"{len(consolidated_rows):,}", "Unique KEY rows after cross-dataset consolidation.", "#8b5cf6")
+with metric_cols[2]:
+    render_luxury_metric("New QA_Log rows", f"{len(rows_to_add):,}", f"Existing duplicate keys skipped: {duplicate_rows:,}.", "#22c55e")
+with metric_cols[3]:
+    missing_keys = int(file_profile["Missing KEY Rows"].sum()) if not file_profile.empty else 0
+    render_luxury_metric("Missing KEY rows", f"{missing_keys:,}", f"Processing errors: {len(processing_errors):,}.", "#f97316")
+
+if processing_errors:
+    st.warning("Some datasets could not be processed: " + " | ".join(processing_errors))
+
+st.markdown("<div style='height: 40px;'></div>", unsafe_allow_html=True)
+
+profile_left, profile_right = st.columns(2, gap="large")
+with profile_left:
+    render_bar_chart(file_profile.rename(columns={"Source Rows": "Count"}), "Dataset", "SurveyCTO Dataset Volume", "#38bdf8")
+with profile_right:
+    render_donut_chart(top_counts(consolidated_rows, "Tool Name", 10), "Tool Name", "Tool Mix Ready for QA_Log", ["#2563eb", "#22c55e", "#f97316", "#8b5cf6", "#0f766e", "#ef4444"])
+
+st.markdown("<div style='height: 40px;'></div>", unsafe_allow_html=True)
+
+geo_left, geo_right = st.columns(2, gap="large")
+with geo_left:
+    render_bar_chart(top_counts(consolidated_rows, "Province", 12), "Province", "Rows by Province", "#0f766e")
+with geo_right:
+    render_bar_chart(top_counts(consolidated_rows, "District", 12), "District", "Rows by District", "#f97316")
+
+st.markdown("<div style='height: 40px;'></div>", unsafe_allow_html=True)
+
+quality_left, quality_right = st.columns(2, gap="large")
+with quality_left:
+    quality_mix = pd.DataFrame(
+        {
+            "Signal": ["New rows", "Duplicate keys", "Missing KEY rows"],
+            "Count": [len(rows_to_add), duplicate_rows, missing_keys],
+        }
+    )
+    render_donut_chart(quality_mix, "Signal", "Append Readiness Mix", ["#22c55e", "#f97316", "#ef4444"])
+with quality_right:
+    render_bar_chart(top_counts(consolidated_rows, "Surveyor_Name", 12), "Surveyor_Name", "Rows by Surveyor", "#8b5cf6")
+
+st.markdown("<div style='height: 40px;'></div>", unsafe_allow_html=True)
+
+table_left, table_right = st.columns(2, gap="large")
+with table_left:
+    st.markdown("### Dataset Quality Profile")
+    if file_profile.empty:
+        st.info("No dataset profile is available.")
+    else:
+        st.dataframe(file_profile, use_container_width=True, hide_index=True, height=460)
+
+with table_right:
+    st.markdown("### Rows Ready To Append")
+    if rows_to_add.empty:
+        st.info("No new rows are ready to append.")
+    else:
+        st.dataframe(rows_to_add[TARGET_COLUMNS], use_container_width=True, hide_index=True, height=460)
+
+if not consolidated_rows.empty:
+    if st.button(f"Add Data To {TARGET_WORKSHEET}", type="primary"):
+        if processing_errors:
+            st.error("Some SurveyCTO datasets could not be processed.")
+            st.stop()
+        total_rows = 0
+
+        if not rows_to_add.empty:
+            try:
+                added_rows = append_dataframe_to_worksheet(rows_to_add[TARGET_COLUMNS], TARGET_WORKSHEET)
+                update_summary_timestamp("Summary")
+            except GoogleSheetsConnectionError as exc:
+                st.error(str(exc))
                 st.stop()
+            total_rows = added_rows
+        else:
             total_rows = 0
 
-            if not rows_to_add.empty:
-                try:
-                    added_rows = append_dataframe_to_worksheet(rows_to_add[TARGET_COLUMNS], TARGET_WORKSHEET)
-                    update_summary_timestamp("Summary")
-                except GoogleSheetsConnectionError as exc:
-                    st.error(str(exc))
-                    st.stop()
-                total_rows = added_rows
-            else:
-                total_rows = 0
-
-            if total_rows > 0:
-                st.success("The data was added to Google Sheets successfully.")
-            else:
-                st.warning("No new data was added to Google Sheets.")
-    elif processing_errors:
-        st.error("The selected files could not be processed.")
+        if total_rows > 0:
+            st.success("The data was added to Google Sheets successfully.")
+        else:
+            st.warning("No new data was added to Google Sheets.")
+elif processing_errors:
+    st.error("SurveyCTO datasets could not be processed.")
 else:
-    st.info("Upload one or more Excel or CSV files to get started.")
+    st.info("No rows were returned from SurveyCTO yet.")

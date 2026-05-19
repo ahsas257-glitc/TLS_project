@@ -13,6 +13,8 @@ from google.oauth2.service_account import Credentials
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
 ]
+DEFAULT_APPEND_BATCH_SIZE = 200
+DEFAULT_APPEND_RETRIES = 4
 
 
 class GoogleSheetsConnectionError(RuntimeError):
@@ -171,16 +173,44 @@ def append_dataframe_to_worksheet(dataframe: pd.DataFrame, worksheet_name: str) 
     existing_values = worksheet.get_all_values()
 
     if not existing_values:
-        worksheet.append_row(cleaned.columns.tolist())
-        worksheet.append_rows(cleaned.values.tolist())
+        _append_rows_with_retry(worksheet_name, [cleaned.columns.tolist()], retries=DEFAULT_APPEND_RETRIES)
+        _append_rows_with_retry(worksheet_name, cleaned.values.tolist(), retries=DEFAULT_APPEND_RETRIES)
         clear_google_sheets_caches()
         return len(cleaned)
 
     headers = existing_values[0]
     aligned = cleaned.reindex(columns=headers, fill_value="")
-    worksheet.append_rows(aligned.values.tolist())
+    _append_rows_with_retry(worksheet_name, aligned.values.tolist(), retries=DEFAULT_APPEND_RETRIES)
     clear_google_sheets_caches()
     return len(aligned)
+
+
+def _append_rows_with_retry(
+    worksheet_name: str,
+    rows: list[list[str]],
+    *,
+    retries: int = DEFAULT_APPEND_RETRIES,
+    batch_size: int = DEFAULT_APPEND_BATCH_SIZE,
+) -> None:
+    if not rows:
+        return
+    for start in range(0, len(rows), batch_size):
+        chunk = rows[start:start + batch_size]
+        last_error: Exception | None = None
+        for attempt in range(retries):
+            try:
+                worksheet = get_worksheet(worksheet_name)
+                worksheet.append_rows(chunk)
+                last_error = None
+                break
+            except Exception as exc:
+                last_error = exc
+                # Exponential backoff for transient network/API resets.
+                time.sleep(0.6 * (2 ** attempt))
+        if last_error is not None:
+            raise GoogleSheetsConnectionError(
+                f"Unable to append rows to `{worksheet_name}` after retries: {last_error}"
+            ) from last_error
 
 
 def update_summary_timestamp(summary_worksheet_name: str = "Summary") -> None:

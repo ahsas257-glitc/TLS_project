@@ -3,10 +3,11 @@ import pandas as pd
 import streamlit as st
 
 from services.google_sheets import load_worksheet_records, load_worksheet_values
+from services.surveycto import fetch_form_dataframe
 from services.ui_theme import apply_liquid_glass_theme
 
-TLS_SHEET = "TLS-Sample"
-ECE_SHEET = "ECE-Sample"
+TLS_FORM_ID = "TLS_Tool5_Classroom_Observation"
+ECE_FORM_IDS = ["ECE_Tool2_Classroom_Observation", "ECE_Tool3_Parent_Interview"]
 SUMMARY_SHEET = "Summary"
 QA_LOG_SHEET = "QA_Log"
 CORRECTION_LOG_SHEET = "Correction_Log"
@@ -19,8 +20,12 @@ DEFAULT_ECE_COLLECTION_TARGET = 162
 
 @st.cache_data(ttl=120)
 def load_dashboard_data() -> tuple[pd.DataFrame, pd.DataFrame, list[list[str]], pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    tls = load_worksheet_records(TLS_SHEET)
-    ece = load_worksheet_records(ECE_SHEET)
+    try:
+        tls = fetch_form_dataframe(TLS_FORM_ID)
+        ece_frames = [fetch_form_dataframe(form_id) for form_id in ECE_FORM_IDS]
+    except Exception as exc:
+        raise RuntimeError(f"SurveyCTO data load failed: {exc}") from exc
+    ece = pd.concat([frame for frame in ece_frames if not frame.empty], ignore_index=True) if any(not frame.empty for frame in ece_frames) else pd.DataFrame()
     summary = load_worksheet_values(SUMMARY_SHEET)
     qa_log = load_worksheet_records(QA_LOG_SHEET)
     correction_log = load_worksheet_records(CORRECTION_LOG_SHEET)
@@ -1482,7 +1487,11 @@ def render_section_header(title: str, description: str) -> None:
     )
 
 
-tls_data, ece_data, summary_rows, qa_log_data, correction_log_data, rejection_log_data, red_flag_log_data, callback_log_data = load_dashboard_data()
+try:
+    tls_data, ece_data, summary_rows, qa_log_data, correction_log_data, rejection_log_data, red_flag_log_data, callback_log_data = load_dashboard_data()
+except Exception as exc:
+    st.error(str(exc))
+    st.stop()
 summary_data = parse_summary_sheet(summary_rows)
 progress_snapshot = build_progress_snapshot(summary_data)
 completion_cards = build_completion_cards(progress_snapshot)
