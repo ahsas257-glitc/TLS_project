@@ -31,6 +31,7 @@ _SS_PASS_LEGACY = "scto_password"
 ENABLE_BROWSER_STORAGE_ENV = "WASH_ENABLE_BROWSER_STORAGE"
 AUTH_FINGERPRINT_KEY = "tool6_auth_fingerprint"
 DEFAULT_REVIEW_STATUS = "approved|pending"
+AUTH_LOCK_UNTIL_KEY = "scto_auth_lock_until"
 
 
 def _get_secret_text(key: str) -> str:
@@ -227,6 +228,23 @@ def is_logged_in() -> bool:
     return bool(username and password)
 
 
+def _auth_lock_remaining_seconds() -> int:
+    try:
+        until = float(st.session_state.get(AUTH_LOCK_UNTIL_KEY, 0) or 0)
+    except Exception:
+        until = 0
+    remaining = int(until - time.time())
+    return max(0, remaining)
+
+
+def _set_auth_lock(seconds: int = 600) -> None:
+    st.session_state[AUTH_LOCK_UNTIL_KEY] = time.time() + max(1, int(seconds))
+
+
+def _clear_auth_lock() -> None:
+    st.session_state[AUTH_LOCK_UNTIL_KEY] = 0
+
+
 def scto_url_to_path(full_url: str) -> str:
     p = urlparse(full_url)
     path = (p.path or "").lstrip("/")
@@ -296,6 +314,10 @@ def surveycto_request(
     load_auth_state()
     if not is_logged_in():
         raise RuntimeError("SurveyCTO credentials are missing. Set SURVEYCTO_USERNAME and SURVEYCTO_PASSWORD in secrets.")
+    remaining = _auth_lock_remaining_seconds()
+    if remaining > 0:
+        mins = max(1, remaining // 60)
+        raise RuntimeError(f"SurveyCTO login is temporarily locked due to failed attempts. Retry in about {mins} minute(s).")
 
     username, password = _resolve_auth_credentials()
     url = BASE_URL.rstrip("/") + "/" + path.lstrip("/")
@@ -311,6 +333,8 @@ def surveycto_request(
         allow_redirects=True,
     )
 
+    if r.status_code == 200:
+        _clear_auth_lock()
     if r.status_code == 401:
         msg = ""
         try:
@@ -319,7 +343,9 @@ def surveycto_request(
         except Exception:
             msg = (r.text or "").strip()
         if "failed login attempts" in msg.lower():
+            _set_auth_lock(600)
             raise RuntimeError("SurveyCTO rejected login due to too many failed attempts. Wait about 10 minutes and retry.")
+        _set_auth_lock(120)
         raise RuntimeError(f"SurveyCTO authentication failed (401). {msg}".strip())
     return r
 
@@ -406,6 +432,10 @@ def fetch_form_dataframe(form_id: str) -> "pd.DataFrame":
     load_auth_state()
     if not is_logged_in():
         raise RuntimeError("SurveyCTO credentials are missing. Add SURVEYCTO_USERNAME and SURVEYCTO_PASSWORD to Streamlit Cloud secrets.")
+    remaining = _auth_lock_remaining_seconds()
+    if remaining > 0:
+        mins = max(1, remaining // 60)
+        raise RuntimeError(f"SurveyCTO login is temporarily locked. Retry in about {mins} minute(s).")
     username = st.session_state.get("scto_username", "").strip()
     auth_fp = st.session_state.get(AUTH_FINGERPRINT_KEY, "")
     rows = fetch_form_submissions_wide_json(form_id, username, auth_fp)

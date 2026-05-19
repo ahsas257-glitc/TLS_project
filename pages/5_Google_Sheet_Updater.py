@@ -386,28 +386,6 @@ with profile_right:
 
 st.markdown("<div style='height: 40px;'></div>", unsafe_allow_html=True)
 
-geo_left, geo_right = st.columns(2, gap="large")
-with geo_left:
-    render_bar_chart(top_counts(consolidated_rows, "Province", 12), "Province", "Rows by Province", "#0f766e")
-with geo_right:
-    render_bar_chart(top_counts(consolidated_rows, "District", 12), "District", "Rows by District", "#f97316")
-
-st.markdown("<div style='height: 40px;'></div>", unsafe_allow_html=True)
-
-quality_left, quality_right = st.columns(2, gap="large")
-with quality_left:
-    quality_mix = pd.DataFrame(
-        {
-            "Signal": ["New rows", "Duplicate keys", "Missing KEY rows"],
-            "Count": [len(rows_to_add), duplicate_rows, missing_keys],
-        }
-    )
-    render_donut_chart(quality_mix, "Signal", "Append Readiness Mix", ["#22c55e", "#f97316", "#ef4444"])
-with quality_right:
-    render_bar_chart(top_counts(consolidated_rows, "Surveyor_Name", 12), "Surveyor_Name", "Rows by Surveyor", "#8b5cf6")
-
-st.markdown("<div style='height: 40px;'></div>", unsafe_allow_html=True)
-
 table_left, table_right = st.columns(2, gap="large")
 with table_left:
     st.markdown("### Dataset Quality Profile")
