@@ -21,6 +21,43 @@ class GoogleSheetsConnectionError(RuntimeError):
     pass
 
 
+def _is_transient_connection_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    transient_markers = [
+        "connection aborted",
+        "connection reset",
+        "forcibly closed by the remote host",
+        "10054",
+        "timed out",
+        "timeout",
+        "temporarily unavailable",
+        "503",
+        "502",
+        "429",
+    ]
+    return any(marker in text for marker in transient_markers)
+
+
+def _friendly_connection_message(exc: Exception, context: str) -> str:
+    if _is_transient_connection_error(exc):
+        return (
+            f"Temporary network issue while accessing Google Sheets during {context}. "
+            "Please retry in a few seconds."
+        )
+    return f"Google Sheets error during {context}: {exc}"
+
+
+def _reset_google_clients() -> None:
+    try:
+        get_workbook.clear()
+    except Exception:
+        pass
+    try:
+        get_gspread_client.clear()
+    except Exception:
+        pass
+
+
 def _get_secret_text(key: str) -> str:
     value = st.secrets.get(key, "")
     return str(value).strip()
@@ -70,29 +107,41 @@ def get_workbook():
 
 
 def get_worksheet(worksheet_name: str | None = None):
-    try:
-        workbook = get_workbook()
-        if worksheet_name:
-            return workbook.worksheet(worksheet_name)
-        return workbook.sheet1
-    except GoogleSheetsConnectionError:
-        raise
-    except gspread.exceptions.WorksheetNotFound as exc:
-        raise GoogleSheetsConnectionError(
-            f"The worksheet `{worksheet_name}` was not found in the target spreadsheet."
-        ) from exc
-    except gspread.exceptions.SpreadsheetNotFound as exc:
-        raise GoogleSheetsConnectionError(
-            "The target spreadsheet could not be found. Verify that the spreadsheet ID or URL is correct and shared with the service account."
-        ) from exc
-    except gspread.exceptions.APIError as exc:
-        raise GoogleSheetsConnectionError(
-            f"Google Sheets API error: {exc}"
-        ) from exc
-    except Exception as exc:
-        raise GoogleSheetsConnectionError(
-            f"Unexpected Google Sheets connection error: {exc}"
-        ) from exc
+    last_error: Exception | None = None
+    for attempt in range(3):
+        try:
+            workbook = get_workbook()
+            if worksheet_name:
+                return workbook.worksheet(worksheet_name)
+            return workbook.sheet1
+        except GoogleSheetsConnectionError as exc:
+            last_error = exc
+        except gspread.exceptions.WorksheetNotFound as exc:
+            raise GoogleSheetsConnectionError(
+                f"The worksheet `{worksheet_name}` was not found in the target spreadsheet."
+            ) from exc
+        except gspread.exceptions.SpreadsheetNotFound as exc:
+            raise GoogleSheetsConnectionError(
+                "The target spreadsheet could not be found. Verify that the spreadsheet ID or URL is correct and shared with the service account."
+            ) from exc
+        except gspread.exceptions.APIError as exc:
+            last_error = exc
+        except Exception as exc:
+            last_error = exc
+
+        if last_error is not None and _is_transient_connection_error(last_error) and attempt < 2:
+            _reset_google_clients()
+            time.sleep(0.7 * (attempt + 1))
+            continue
+        break
+
+    if isinstance(last_error, GoogleSheetsConnectionError):
+        raise last_error
+    if isinstance(last_error, gspread.exceptions.APIError):
+        raise GoogleSheetsConnectionError(_friendly_connection_message(last_error, "Google Sheets API request")) from last_error
+    if last_error is not None:
+        raise GoogleSheetsConnectionError(_friendly_connection_message(last_error, "Google Sheets connection")) from last_error
+    raise GoogleSheetsConnectionError("Unable to open worksheet due to an unknown Google Sheets error.")
 
 
 @st.cache_data(ttl=1800, show_spinner=False)
@@ -206,10 +255,12 @@ def _append_rows_with_retry(
             except Exception as exc:
                 last_error = exc
                 # Exponential backoff for transient network/API resets.
+                if _is_transient_connection_error(exc):
+                    _reset_google_clients()
                 time.sleep(0.6 * (2 ** attempt))
         if last_error is not None:
             raise GoogleSheetsConnectionError(
-                f"Unable to append rows to `{worksheet_name}` after retries: {last_error}"
+                _friendly_connection_message(last_error, f"appending rows to `{worksheet_name}`")
             ) from last_error
 
 

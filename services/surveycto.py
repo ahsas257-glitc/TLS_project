@@ -39,6 +39,15 @@ def _get_secret_text(key: str) -> str:
         value = str(st.secrets.get(key, "")).strip()
         if value:
             return value
+        # Some deployments store keys under nested sections.
+        secrets_map: Dict[str, Any]
+        if hasattr(st.secrets, "to_dict"):
+            secrets_map = st.secrets.to_dict()  # type: ignore[assignment]
+        else:
+            secrets_map = dict(st.secrets)
+        nested = _find_key_recursively(secrets_map, key)
+        if nested is not None and str(nested).strip():
+            return str(nested).strip()
     except Exception:
         pass
     # 2) Environment variables
@@ -396,7 +405,7 @@ def fetch_form_dataframe(form_id: str) -> "pd.DataFrame":
 
     load_auth_state()
     if not is_logged_in():
-        return pd.DataFrame()
+        raise RuntimeError("SurveyCTO credentials are missing. Add SURVEYCTO_USERNAME and SURVEYCTO_PASSWORD to Streamlit Cloud secrets.")
     username = st.session_state.get("scto_username", "").strip()
     auth_fp = st.session_state.get(AUTH_FINGERPRINT_KEY, "")
     rows = fetch_form_submissions_wide_json(form_id, username, auth_fp)
