@@ -318,6 +318,8 @@ apply_liquid_glass_theme(
     accent="#f59e0b",
 )
 
+st.markdown("<div style='height: 22px;'></div>", unsafe_allow_html=True)
+
 transformed_datasets: list[tuple[str, pd.DataFrame]] = []
 processing_errors: list[str] = []
 file_profile_rows: list[dict[str, object]] = []
